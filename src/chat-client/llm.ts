@@ -15,18 +15,18 @@
 // USAGE:
 // import { generateResponse } from './llm';
 // const response = await generateResponse(systemPrompt, messages);
+// // Or with custom model:
+// const response = await generateResponse(systemPrompt, messages, { model: 'claude-3-haiku-20240307' });
 //
 // ============================================================================
 
 import Anthropic from '@anthropic-ai/sdk';
 import { PromptMessage } from './prompt';
+import { DEFAULT_CHAT_MODEL } from '../lib/constants';
 
 // ----------------------------------------------------------------------------
 // CONFIGURATION
 // ----------------------------------------------------------------------------
-
-/** Claude model to use */
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 
 /** Maximum tokens in response */
 const MAX_TOKENS = 4096;
@@ -37,6 +37,15 @@ const TEMPERATURE = 0.3;
 // ----------------------------------------------------------------------------
 // TYPES
 // ----------------------------------------------------------------------------
+
+export interface LLMOptions {
+  /** Claude model to use (defaults to DEFAULT_CHAT_MODEL from constants) */
+  model?: string;
+  /** Maximum tokens in response */
+  maxTokens?: number;
+  /** Temperature for response generation */
+  temperature?: number;
+}
 
 export interface LLMResponse {
   content: string;
@@ -69,22 +78,28 @@ function getAnthropicClient(): Anthropic {
  * 
  * @param systemPrompt - System instructions with document context
  * @param messages - Conversation history + current user query
+ * @param options - Optional configuration (model, maxTokens, temperature)
  * @returns LLMResponse with content and metadata
  */
 export async function generateResponse(
   systemPrompt: string,
-  messages: PromptMessage[]
+  messages: PromptMessage[],
+  options: LLMOptions = {}
 ): Promise<LLMResponse> {
+  const model = options.model || DEFAULT_CHAT_MODEL;
+  const maxTokens = options.maxTokens || MAX_TOKENS;
+  const temperature = options.temperature || TEMPERATURE;
+
   console.log('[LLM] Calling Claude...');
-  console.log('[LLM] Model: %s', CLAUDE_MODEL);
+  console.log('[LLM] Model: %s', model);
   console.log('[LLM] Messages: %d', messages.length);
 
   const startTime = Date.now();
 
   const response = await getAnthropicClient().messages.create({
-    model: CLAUDE_MODEL,
-    max_tokens: MAX_TOKENS,
-    temperature: TEMPERATURE,
+    model,
+    max_tokens: maxTokens,
+    temperature,
     system: systemPrompt,
     messages: messages.map(m => ({
       role: m.role,
@@ -116,7 +131,7 @@ export async function generateResponse(
 }
 
 /**
- * Returns current configuration
+ * Returns current default configuration
  */
 export function getLLMConfig(): {
   model: string;
@@ -124,7 +139,7 @@ export function getLLMConfig(): {
   temperature: number;
 } {
   return {
-    model: CLAUDE_MODEL,
+    model: DEFAULT_CHAT_MODEL,
     maxTokens: MAX_TOKENS,
     temperature: TEMPERATURE,
   };

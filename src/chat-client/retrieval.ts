@@ -22,33 +22,31 @@
 //
 // USAGE:
 // import { retrieveChunks } from './retrieval';
-// const chunks = await retrieveChunks('When does the EP Minerals lease expire?');
+// const result = await retrieveChunks('When does the EP Minerals lease expire?');
+// // Or with custom options:
+// const result = await retrieveChunks(query, { chunkCount: 10, similarityThreshold: 0.5 });
 //
 // ============================================================================
 
 import OpenAI from 'openai';
 import { supabase } from '../supabase';
-
-// ----------------------------------------------------------------------------
-// CONFIGURATION
-// ----------------------------------------------------------------------------
-// Adjust these parameters to tune retrieval behavior
-
-/** Number of chunks to retrieve per query */
-const CHUNKS_TO_RETRIEVE = 5;
-
-/** Minimum similarity score (0-1). Chunks below this are filtered out at DB level. */
-const SIMILARITY_THRESHOLD = 0.0;
-
-/** OpenAI embedding model - must match what was used during ingestion */
-const EMBEDDING_MODEL = 'text-embedding-3-small';
-
-/** Expected embedding dimensions (must match database column) */
-const EMBEDDING_DIMENSIONS = 1536;
+import {
+  DEFAULT_CHUNKS_PER_QUERY,
+  DEFAULT_SIMILARITY_THRESHOLD,
+  DEFAULT_EMBEDDING_MODEL,
+  EMBEDDING_DIMENSIONS,
+} from '../lib/constants';
 
 // ----------------------------------------------------------------------------
 // TYPES
 // ----------------------------------------------------------------------------
+
+export interface RetrievalOptions {
+  /** Number of chunks to retrieve (defaults to DEFAULT_CHUNKS_PER_QUERY) */
+  chunkCount?: number;
+  /** Minimum similarity score 0-1 (defaults to DEFAULT_SIMILARITY_THRESHOLD) */
+  similarityThreshold?: number;
+}
 
 export interface RetrievedChunk {
   id: string;
@@ -93,14 +91,11 @@ function getOpenAIClient(): OpenAI {
  */
 export async function retrieveChunks(
   query: string,
-  options: {
-    chunkCount?: number;
-    similarityThreshold?: number;
-  } = {}
+  options: RetrievalOptions = {}
 ): Promise<RetrievalResult> {
   const startTime = Date.now();
-  const chunkCount = options.chunkCount ?? CHUNKS_TO_RETRIEVE;
-  const threshold = options.similarityThreshold ?? SIMILARITY_THRESHOLD;
+  const chunkCount = options.chunkCount ?? DEFAULT_CHUNKS_PER_QUERY;
+  const threshold = options.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
 
   console.log('[RETRIEVAL] Starting retrieval...');
   console.log('[RETRIEVAL] Query: "%s"', query.substring(0, 100) + (query.length > 100 ? '...' : ''));
@@ -111,7 +106,7 @@ export async function retrieveChunks(
   const embeddingStart = Date.now();
   
   const embeddingResponse = await getOpenAIClient().embeddings.create({
-    model: EMBEDDING_MODEL,
+    model: DEFAULT_EMBEDDING_MODEL,
     input: query,
   });
 
@@ -189,14 +184,14 @@ export async function retrieveChunks(
  */
 export async function embedQuery(query: string): Promise<number[]> {
   const response = await getOpenAIClient().embeddings.create({
-    model: EMBEDDING_MODEL,
+    model: DEFAULT_EMBEDDING_MODEL,
     input: query,
   });
   return response.data[0].embedding;
 }
 
 /**
- * Returns current configuration for debugging
+ * Returns current default configuration
  */
 export function getRetrievalConfig(): {
   chunksToRetrieve: number;
@@ -205,9 +200,9 @@ export function getRetrievalConfig(): {
   embeddingDimensions: number;
 } {
   return {
-    chunksToRetrieve: CHUNKS_TO_RETRIEVE,
-    similarityThreshold: SIMILARITY_THRESHOLD,
-    embeddingModel: EMBEDDING_MODEL,
+    chunksToRetrieve: DEFAULT_CHUNKS_PER_QUERY,
+    similarityThreshold: DEFAULT_SIMILARITY_THRESHOLD,
+    embeddingModel: DEFAULT_EMBEDDING_MODEL,
     embeddingDimensions: EMBEDDING_DIMENSIONS,
   };
 }

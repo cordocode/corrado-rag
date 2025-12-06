@@ -12,38 +12,20 @@
 // 1. Takes retrieved chunks from vector search
 // 2. Takes conversation history
 // 3. Takes the current user query
-// 4. Builds a system prompt with instructions
+// 4. Builds a system prompt with instructions (default or custom)
 // 5. Formats everything for the Claude API
 //
 // USAGE:
 // import { buildPrompt } from './prompt';
 // const { systemPrompt, messages } = buildPrompt(chunks, history, query);
+// // Or with custom system prompt:
+// const { systemPrompt, messages } = buildPrompt(chunks, history, query, customPrompt);
 //
 // ============================================================================
 
 import { RetrievedChunk } from './retrieval';
 import { HistoryMessage } from './get-history';
-
-// ----------------------------------------------------------------------------
-// CONFIGURATION
-// ----------------------------------------------------------------------------
-
-/** System prompt that instructs Claude how to behave */
-const SYSTEM_PROMPT = `You are a helpful assistant that answers questions about documents.
-
-You have access to relevant document excerpts provided below. Use these to answer the user's questions accurately.
-
-INSTRUCTIONS:
-- Answer based on the provided document context
-- If the answer is in the documents, cite which document it came from
-- If the answer is NOT in the provided context, say so clearly
-- Be concise but complete
-- If asked about specific terms, dates, or numbers, quote them exactly from the documents
-
-DOCUMENT CONTEXT:
-{chunks}
-
-Answer the user's question based on the above context.`;
+import { DEFAULT_SYSTEM_PROMPT } from '../lib/constants';
 
 // ----------------------------------------------------------------------------
 // TYPES
@@ -72,21 +54,27 @@ export interface BuiltPrompt {
  * @param chunks - Retrieved document chunks from vector search
  * @param history - Previous messages in the conversation
  * @param userQuery - The current user question
+ * @param customSystemPrompt - Optional custom system prompt (uses default if not provided)
  * @returns BuiltPrompt ready for Claude API
  */
 export function buildPrompt(
   chunks: RetrievedChunk[],
   history: HistoryMessage[],
-  userQuery: string
+  userQuery: string,
+  customSystemPrompt?: string | null
 ): BuiltPrompt {
   console.log('[PROMPT] Building prompt...');
   console.log('[PROMPT] Chunks: %d, History: %d messages', chunks.length, history.length);
+  console.log('[PROMPT] Using %s system prompt', customSystemPrompt ? 'custom' : 'default');
 
   // Format chunks into readable context
   const chunksText = formatChunks(chunks);
 
+  // Use custom prompt if provided, otherwise use default
+  const promptTemplate = customSystemPrompt || DEFAULT_SYSTEM_PROMPT;
+
   // Build system prompt with chunks inserted
-  const systemPrompt = SYSTEM_PROMPT.replace('{chunks}', chunksText);
+  const systemPrompt = promptTemplate.replace('{chunks}', chunksText);
 
   // Convert history to Claude message format
   const messages: PromptMessage[] = history.map(msg => ({
@@ -138,8 +126,8 @@ ${chunk.content}`;
 }
 
 /**
- * Returns the current system prompt template (for debugging)
+ * Returns the default system prompt template (for UI display)
  */
 export function getSystemPromptTemplate(): string {
-  return SYSTEM_PROMPT;
+  return DEFAULT_SYSTEM_PROMPT;
 }
