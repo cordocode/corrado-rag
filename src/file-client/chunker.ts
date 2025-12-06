@@ -10,8 +10,8 @@
 //
 // WHAT IT DOES:
 // 1. Takes cleaned text + extracted chips from classifier
-// 2. Splits text into ~300-500 word chunks
-// 3. Prepends chip header to each chunk
+// 2. Splits text into chunks based on configured word count
+// 3. Adds chip header to each chunk (prepend, or prepend+append)
 // 4. Returns array of chip-chunks ready for embedding
 //
 // WHY CHIPS IN EVERY CHUNK:
@@ -23,13 +23,15 @@
 // - Works across any vector database
 // - Similarity naturally incorporates document context
 //
-// CHUNK FORMAT:
+// CHUNK FORMAT (prepend_append):
 // [DOCUMENT CONTEXT]
 // Property Address: 595 Double Eagle Court, Reno, NV 89521-6009
 // Tenant Name: EP Minerals, LLC
-// ...
 // [CONTENT]
 // The actual document text for this chunk...
+// [DOCUMENT CONTEXT]
+// Property Address: 595 Double Eagle Court, Reno, NV 89521-6009
+// Tenant Name: EP Minerals, LLC
 //
 // USAGE:
 // import { chunkDocument } from './chunker';
@@ -44,13 +46,13 @@ import { Chips } from '../types';
 // ----------------------------------------------------------------------------
 
 export interface ChunkerOptions {
-  // Target words per chunk (default: 400, range: 300-500)
+  // Target words per chunk (default: 200)
   targetChunkWords?: number;
   
   // Minimum words per chunk - prevents tiny final chunks (default: 100)
   minChunkWords?: number;
   
-  // Overlap words between chunks for continuity (default: 50)
+  // Overlap words between chunks for continuity (default: 25)
   overlapWords?: number;
   
   // Use section breaks (---) as preferred split points (default: true)
@@ -58,14 +60,18 @@ export interface ChunkerOptions {
   
   // Include chunk index in output (default: true)
   includeChunkIndex?: boolean;
+  
+  // Where to place chip header: 'prepend' or 'prepend_append' (default: 'prepend_append')
+  chipPosition?: 'prepend' | 'prepend_append';
 }
 
 const DEFAULT_OPTIONS: ChunkerOptions = {
-  targetChunkWords: 400,
+  targetChunkWords: 200,
   minChunkWords: 100,
-  overlapWords: 50,
+  overlapWords: 25,
   respectSectionBreaks: true,
   includeChunkIndex: true,
+  chipPosition: 'prepend_append',
 };
 
 // ----------------------------------------------------------------------------
@@ -73,7 +79,7 @@ const DEFAULT_OPTIONS: ChunkerOptions = {
 // ----------------------------------------------------------------------------
 
 export interface ChipChunk {
-  content: string;           // Full chunk content with chip header prepended
+  content: string;           // Full chunk content with chip header prepended (and appended)
   chunkIndex: number;        // Position in document (0, 1, 2, ...)
   wordCount: number;         // Words in the content portion (excluding header)
   startChar: number;         // Character offset in original text
@@ -110,6 +116,7 @@ export function chunkDocument(
   console.log('[CHUNKER] Text length: %d chars', text.length);
   console.log('[CHUNKER] Target chunk size: %d words', opts.targetChunkWords);
   console.log('[CHUNKER] Overlap: %d words', opts.overlapWords);
+  console.log('[CHUNKER] Chip position: %s', opts.chipPosition);
 
   // Build the chip header
   const chipHeader = buildChipHeader(chips);
@@ -119,14 +126,24 @@ export function chunkDocument(
   const rawChunks = splitIntoChunks(text, opts);
   console.log('[CHUNKER] Raw chunks created: %d', rawChunks.length);
 
-  // Prepend chip header to each chunk
-  const chipChunks: ChipChunk[] = rawChunks.map((chunk, index) => ({
-    content: `${chipHeader}\n${chunk.text}`,
-    chunkIndex: index,
-    wordCount: chunk.wordCount,
-    startChar: chunk.startChar,
-    endChar: chunk.endChar,
-  }));
+  // Add chip header to each chunk based on position setting
+  const chipChunks: ChipChunk[] = rawChunks.map((chunk, index) => {
+    let content: string;
+    
+    if (opts.chipPosition === 'prepend_append') {
+      content = `${chipHeader}\n${chunk.text}\n${chipHeader}`;
+    } else {
+      content = `${chipHeader}\n${chunk.text}`;
+    }
+    
+    return {
+      content,
+      chunkIndex: index,
+      wordCount: chunk.wordCount,
+      startChar: chunk.startChar,
+      endChar: chunk.endChar,
+    };
+  });
 
   // Calculate stats
   const totalWords = chipChunks.reduce((sum, c) => sum + c.wordCount, 0);
@@ -353,4 +370,11 @@ export function estimateChunkCount(
  */
 export function getWordCount(text: string): number {
   return text.split(/\s+/).filter(w => w).length;
+}
+
+/**
+ * Returns current default configuration
+ */
+export function getChunkerConfig(): ChunkerOptions {
+  return { ...DEFAULT_OPTIONS };
 }

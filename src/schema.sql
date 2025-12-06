@@ -1,18 +1,18 @@
 -- ============================================================================
--- CORRADO RAG - COMPLETE DATABASE SCHEMA
+-- CORRADO RAG - DATABASE SCHEMA
 -- ============================================================================
 --
--- This is the complete schema for the Corrado RAG system.
--- Run this in Supabase SQL Editor for a fresh project.
+-- Last updated: 2025-01-XX (after optimizer cleanup)
 --
--- WHAT THIS CREATES:
--- 1. pgvector extension (for embeddings)
--- 2. file_type_templates table (document type definitions)
--- 3. documents table (uploaded files)
--- 4. chip_chunks table (embedded text chunks)
--- 5. conversations table (chat sessions)
--- 6. messages table (chat messages)
--- 7. match_chunks function (vector similarity search)
+-- TABLES:
+-- 1. file_type_templates - Document type definitions + chip fields
+-- 2. documents - Uploaded files and processing status
+-- 3. chip_chunks - Embedded text chunks with chip headers
+-- 4. conversations - Chat sessions
+-- 5. messages - Individual chat messages
+--
+-- FUNCTIONS:
+-- 1. match_chunks - Vector similarity search
 --
 -- ============================================================================
 
@@ -21,7 +21,6 @@
 -- EXTENSIONS
 -- ============================================================================
 
--- Enable pgvector for vector similarity search
 CREATE EXTENSION IF NOT EXISTS vector;
 
 
@@ -29,8 +28,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- FILE TYPE TEMPLATES
 -- ============================================================================
 -- Defines document types and what metadata (chips) to extract from each.
--- The chip_fields array lists the fields that will be extracted and
--- prepended to each chunk for semantic search.
+-- Chips are prepended (and appended) to each chunk for semantic search.
 
 CREATE TABLE file_type_templates (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,26 +38,15 @@ CREATE TABLE file_type_templates (
   created_at timestamptz DEFAULT now()
 );
 
--- Seed: Lease template
-INSERT INTO file_type_templates (type_name, chip_fields, extraction_prompt) VALUES (
-  'lease',
-  '["property_address", "unit_number", "tenant_name", "landlord", "lease_start", "lease_end", "monthly_rent", "security_deposit"]',
-  'Extract lease agreement details including property, parties, dates, and financial terms.'
-);
-
--- Seed: Misc template (fallback for unrecognized documents)
-INSERT INTO file_type_templates (type_name, chip_fields, extraction_prompt) VALUES (
-  'misc',
-  '["document_title", "date", "parties_involved", "summary"]',
-  'Extract general document information.'
-);
+-- Current templates:
+-- lease: ["property_address", "tenant_name"]
+-- misc: ["document_title", "date", "parties_involved", "summary"]
 
 
 -- ============================================================================
 -- DOCUMENTS
 -- ============================================================================
--- Master record for each uploaded file. Tracks processing status and
--- stores the full extracted text.
+-- Master record for each uploaded file.
 
 CREATE TABLE documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -68,23 +55,19 @@ CREATE TABLE documents (
   file_type text REFERENCES file_type_templates(type_name),
   file_url text,
   full_text text,
-  status text DEFAULT 'pending',
+  status text DEFAULT 'pending',  -- pending, processing, complete, error
   uploaded_at timestamptz DEFAULT now(),
   processed_at timestamptz
 );
 
--- Index for status queries (e.g., find all pending documents)
 CREATE INDEX idx_documents_status ON documents(status);
 
 
 -- ============================================================================
 -- CHIP-CHUNKS
 -- ============================================================================
--- Document chunks with chip metadata prepended. Each chunk contains:
--- [DOCUMENT CONTEXT] header with extracted metadata
--- [CONTENT] section with actual document text
---
--- The embedding is a 1536-dimensional vector from OpenAI text-embedding-3-small
+-- Document chunks with chip metadata prepended and appended.
+-- Embedding is 1536-dimensional vector from OpenAI text-embedding-3-small.
 
 CREATE TABLE chip_chunks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -95,12 +78,8 @@ CREATE TABLE chip_chunks (
   created_at timestamptz DEFAULT now()
 );
 
--- IVFFlat index for fast approximate nearest neighbor search
--- Uses cosine similarity (vector_cosine_ops)
 CREATE INDEX idx_chip_chunks_embedding ON chip_chunks 
   USING ivfflat (embedding vector_cosine_ops);
-
--- Index for document lookups
 CREATE INDEX idx_chip_chunks_document ON chip_chunks(document_id);
 
 
@@ -119,7 +98,6 @@ CREATE TABLE conversations (
 -- MESSAGES
 -- ============================================================================
 -- Individual messages within a conversation.
--- Role is either 'user' or 'assistant'.
 
 CREATE TABLE messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -129,76 +107,71 @@ CREATE TABLE messages (
   created_at timestamptz DEFAULT now()
 );
 
--- Index for fetching conversation history
 CREATE INDEX idx_messages_conversation ON messages(conversation_id, created_at);
 
 
 -- ============================================================================
 -- VECTOR SEARCH FUNCTION
 -- ============================================================================
--- Enables semantic similarity search via supabase.rpc('match_chunks', {...})
---
--- The Supabase JS client doesn't natively support pgvector operators,
--- so we wrap the search in a database function.
---
--- USAGE:
---   SELECT * FROM match_chunks(
---     query_embedding := '[0.1, 0.2, ...]'::vector,
---     match_threshold := 0.3,
---     match_count := 5
---   );
+-- Semantic similarity search. Accepts embedding as JSON text string.
+-- CRITICAL: Uses LANGUAGE sql (not plpgsql) to avoid pgvector bug.
 
-CREATE OR REPLACE FUNCTION match_chunks(
-  query_embedding vector(1536),
-  match_threshold float DEFAULT 0.3,
-  match_count int DEFAULT 5
+CREATE OR REPLACE FUNCTION public.match_chunks(
+  query_embedding text,
+  match_threshold double precision DEFAULT 0.0,
+  match_count integer DEFAULT 5
 )
 RETURNS TABLE (
   id uuid,
   document_id uuid,
   content text,
-  chunk_index int,
-  similarity float,
+  chunk_index integer,
+  similarity double precision,
   document_name text,
   file_type text
 )
-LANGUAGE plpgsql
+LANGUAGE sql
 AS $$
-BEGIN
-  RETURN QUERY
-  SELECT
+  WITH parsed AS (
+    SELECT array_agg(elem::float8) AS float_array
+    FROM json_array_elements_text(query_embedding::json) AS elem
+  ),
+  query_vec AS (
+    SELECT float_array::vector(1536) AS qv FROM parsed
+  )
+  SELECT 
     cc.id,
     cc.document_id,
     cc.content,
     cc.chunk_index,
-    1 - (cc.embedding <=> query_embedding) AS similarity,
+    (1.0 - (cc.embedding <=> qv.qv))::double precision AS similarity,
     d.original_name AS document_name,
     d.file_type
   FROM chip_chunks cc
+  CROSS JOIN query_vec qv
   LEFT JOIN documents d ON cc.document_id = d.id
-  WHERE 1 - (cc.embedding <=> query_embedding) >= match_threshold
-  ORDER BY cc.embedding <=> query_embedding ASC
+  WHERE cc.embedding IS NOT NULL
+    AND (1.0 - (cc.embedding <=> qv.qv)) >= match_threshold
+  ORDER BY cc.embedding <=> qv.qv
   LIMIT match_count;
-END;
 $$;
 
--- Grant execute permissions
-GRANT EXECUTE ON FUNCTION match_chunks(vector, float, int) TO authenticated;
-GRANT EXECUTE ON FUNCTION match_chunks(vector, float, int) TO anon;
-GRANT EXECUTE ON FUNCTION match_chunks(vector, float, int) TO service_role;
+GRANT EXECUTE ON FUNCTION match_chunks(text, double precision, integer) 
+  TO authenticated, anon, service_role;
 
 
 -- ============================================================================
--- VERIFICATION
+-- USAGE NOTES
 -- ============================================================================
-
-DO $$
-BEGIN
-  RAISE NOTICE '✓ Schema created successfully!';
-  RAISE NOTICE '  - file_type_templates (2 seed records)';
-  RAISE NOTICE '  - documents';
-  RAISE NOTICE '  - chip_chunks (with vector index)';
-  RAISE NOTICE '  - conversations';
-  RAISE NOTICE '  - messages';
-  RAISE NOTICE '  - match_chunks() function';
-END $$;
+--
+-- From JavaScript/TypeScript, call match_chunks like this:
+--
+--   const { data } = await supabase.rpc('match_chunks', {
+--     query_embedding: JSON.stringify(embeddingArray),  // MUST stringify
+--     match_threshold: 0.0,
+--     match_count: 5,
+--   });
+--
+-- Parameters are controlled in src/chat-client/retrieval.ts
+--
+-- ============================================================================
