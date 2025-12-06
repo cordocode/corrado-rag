@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RAG Optimization Results</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+    h1 { color: #38bdf8; margin-bottom: 0.5rem; }
+    h2 { color: #94a3b8; margin: 2rem 0 1rem; }
+    .winner { background: linear-gradient(135deg, #065f46, #064e3b); border: 1px solid #10b981; border-radius: 12px; padding: 1.5rem; margin: 1rem 0 2rem; }
+    .winner h3 { color: #34d399; }
+    .stats { display: flex; gap: 2rem; margin-top: 1rem; flex-wrap: wrap; }
+    .stat { text-align: center; }
+    .stat .val { font-size: 2rem; font-weight: bold; color: #6ee7b7; }
+    .stat .lbl { color: #a7f3d0; font-size: 0.875rem; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 2rem; }
+    .chart { background: #1e293b; border-radius: 12px; padding: 1rem; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; margin-bottom: 2rem; }
+    th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #334155; }
+    th { background: #334155; color: #94a3b8; }
+    .rank { display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 4px; font-weight: bold; font-size: 0.75rem; }
+    .r1 { background: #22c55e; color: #052e16; }
+    .r2 { background: #84cc16; color: #1a2e05; }
+    .r3 { background: #eab308; color: #422006; }
+    .r4 { background: #f97316; color: #431407; }
+    .r5 { background: #ef4444; color: #450a0a; }
+    .miss { color: #64748b; }
+    .param { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
+    .pcard { background: #1e293b; border-radius: 12px; padding: 1rem; }
+    .pcard h4 { color: #94a3b8; margin-bottom: 0.5rem; }
+    .prow { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #334155; }
+    .prow:last-child { border: none; }
+    .good { color: #4ade80; }
+    .bad { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>RAG Optimization Results</h1>
+  <p style="color:#64748b">Tested 16 configs × 9 questions</p>
+
+  <div class="winner">
+    <h3>🏆 Best: 200w/0o/2c/pre+app</h3>
+    <div class="stats">
+      <div class="stat"><div class="val">9/9</div><div class="lbl">Found</div></div>
+      <div class="stat"><div class="val">1.44</div><div class="lbl">Avg Rank</div></div>
+      <div class="stat"><div class="val">469</div><div class="lbl">Chunks</div></div>
+      <div class="stat"><div class="val">200w</div><div class="lbl">Chunk Size</div></div>
+      <div class="stat"><div class="val">0w</div><div class="lbl">Overlap</div></div>
+      <div class="stat"><div class="val">2</div><div class="lbl">Chips</div></div>
+    </div>
+  </div>
+
+  <div class="charts">
+    <div class="chart"><canvas id="c1"></canvas></div>
+    <div class="chart"><canvas id="c2"></canvas></div>
+  </div>
+
+  <h2>Parameter Impact</h2>
+  <div class="param">
+    <div class="pcard"><h4>Chunk Size</h4><div class="prow"><span>200</span><span class="good">8.8/9</span></div><div class="prow"><span>500</span><span class="bad">8.1/9</span></div></div>
+    <div class="pcard"><h4>Overlap</h4><div class="prow"><span>0</span><span class="bad">8.3/9</span></div><div class="prow"><span>50</span><span class="good">8.6/9</span></div></div>
+    <div class="pcard"><h4>Chip Count</h4><div class="prow"><span>2</span><span class="good">8.6/9</span></div><div class="prow"><span>5</span><span class="bad">8.3/9</span></div></div>
+    <div class="pcard"><h4>Chip Position</h4><div class="prow"><span>prepend</span><span class="bad">8.4/9</span></div><div class="prow"><span>prepend_append</span><span class="good">8.5/9</span></div></div>
+  </div>
+
+  <h2>All Configurations</h2>
+  <table>
+    <tr><th>#</th><th>Config</th><th>Chunks</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>Q5</th><th>Q6</th><th>Q7</th><th>Q8</th><th>Q9</th><th>Found</th><th>Rank</th></tr>
+    <tr>
+      <td>1</td>
+      <td>200w/0o/2c/pre+app</td>
+      <td>469</td>
+      <td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td>
+      <td>9/9</td>
+      <td>1.44</td>
+    </tr><tr>
+      <td>2</td>
+      <td>200w/50o/2c/pre</td>
+      <td>623</td>
+      <td><span class="rank r4">4</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td>
+      <td>9/9</td>
+      <td>1.44</td>
+    </tr><tr>
+      <td>3</td>
+      <td>200w/50o/2c/pre+app</td>
+      <td>623</td>
+      <td><span class="rank r4">4</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td>
+      <td>9/9</td>
+      <td>1.44</td>
+    </tr><tr>
+      <td>4</td>
+      <td>200w/50o/5c/pre+app</td>
+      <td>623</td>
+      <td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r5">5</span></td><td><span class="rank r1">1</span></td>
+      <td>9/9</td>
+      <td>1.44</td>
+    </tr><tr>
+      <td>5</td>
+      <td>200w/50o/5c/pre</td>
+      <td>623</td>
+      <td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td>
+      <td>9/9</td>
+      <td>1.56</td>
+    </tr><tr>
+      <td>6</td>
+      <td>500w/50o/2c/pre+app</td>
+      <td>213</td>
+      <td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r2">2</span></td><td><span class="rank r3">3</span></td><td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r2">2</span></td>
+      <td>9/9</td>
+      <td>1.89</td>
+    </tr><tr>
+      <td>7</td>
+      <td>200w/0o/2c/pre</td>
+      <td>469</td>
+      <td><span class="rank r3">3</span></td><td><span class="rank r2">2</span></td><td><span class="rank r2">2</span></td><td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r4">4</span></td><td><span class="rank r1">1</span></td>
+      <td>9/9</td>
+      <td>2.00</td>
+    </tr><tr>
+      <td>8</td>
+      <td>500w/0o/2c/pre</td>
+      <td>192</td>
+      <td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td class="miss">✗</td><td><span class="rank r1">1</span></td>
+      <td>8/9</td>
+      <td>1.25</td>
+    </tr><tr>
+      <td>9</td>
+      <td>500w/0o/2c/pre+app</td>
+      <td>192</td>
+      <td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td><td class="miss">✗</td><td><span class="rank r1">1</span></td>
+      <td>8/9</td>
+      <td>1.25</td>
+    </tr><tr>
+      <td>10</td>
+      <td>500w/0o/5c/pre+app</td>
+      <td>192</td>
+      <td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td class="miss">✗</td><td><span class="rank r1">1</span></td>
+      <td>8/9</td>
+      <td>1.25</td>
+    </tr><tr>
+      <td>11</td>
+      <td>500w/0o/5c/pre</td>
+      <td>192</td>
+      <td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td class="miss">✗</td><td><span class="rank r2">2</span></td>
+      <td>8/9</td>
+      <td>1.50</td>
+    </tr><tr>
+      <td>12</td>
+      <td>200w/0o/5c/pre+app</td>
+      <td>469</td>
+      <td><span class="rank r2">2</span></td><td><span class="rank r2">2</span></td><td><span class="rank r3">3</span></td><td><span class="rank r2">2</span></td><td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td class="miss">✗</td><td><span class="rank r1">1</span></td>
+      <td>8/9</td>
+      <td>1.75</td>
+    </tr><tr>
+      <td>13</td>
+      <td>500w/50o/2c/pre</td>
+      <td>213</td>
+      <td><span class="rank r3">3</span></td><td><span class="rank r2">2</span></td><td><span class="rank r2">2</span></td><td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td class="miss">✗</td><td><span class="rank r2">2</span></td>
+      <td>8/9</td>
+      <td>1.88</td>
+    </tr><tr>
+      <td>14</td>
+      <td>200w/0o/5c/pre</td>
+      <td>469</td>
+      <td><span class="rank r5">5</span></td><td><span class="rank r2">2</span></td><td><span class="rank r3">3</span></td><td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td class="miss">✗</td><td><span class="rank r1">1</span></td>
+      <td>8/9</td>
+      <td>2.13</td>
+    </tr><tr>
+      <td>15</td>
+      <td>500w/50o/5c/pre</td>
+      <td>213</td>
+      <td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r3">3</span></td><td><span class="rank r3">3</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td class="miss">✗</td><td><span class="rank r4">4</span></td>
+      <td>8/9</td>
+      <td>2.13</td>
+    </tr><tr>
+      <td>16</td>
+      <td>500w/50o/5c/pre+app</td>
+      <td>213</td>
+      <td><span class="rank r1">1</span></td><td><span class="rank r2">2</span></td><td><span class="rank r5">5</span></td><td class="miss">✗</td><td><span class="rank r2">2</span></td><td><span class="rank r1">1</span></td><td><span class="rank r1">1</span></td><td><span class="rank r4">4</span></td><td><span class="rank r2">2</span></td>
+      <td>8/9</td>
+      <td>2.25</td>
+    </tr>
+  </table>
+
+  <script>
+    new Chart(document.getElementById('c1'), {
+      type: 'bar',
+      data: { labels: ["200w/0o/2c/pre+app","200w/50o/2c/pre","200w/50o/2c/pre+app","200w/50o/5c/pre+app","200w/50o/5c/pre","500w/50o/2c/pre+app","200w/0o/2c/pre","500w/0o/2c/pre","500w/0o/2c/pre+app","500w/0o/5c/pre+app","500w/0o/5c/pre","200w/0o/5c/pre+app","500w/50o/2c/pre","200w/0o/5c/pre","500w/50o/5c/pre","500w/50o/5c/pre+app"], datasets: [{ data: [9,9,9,9,9,9,9,8,8,8,8,8,8,8,8,8], backgroundColor: ["#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e"] }] },
+      options: { plugins: { legend: { display: false }, title: { display: true, text: 'Questions Found', color: '#e2e8f0' } }, scales: { y: { max: 9, ticks: { color: '#94a3b8' } }, x: { ticks: { color: '#94a3b8', maxRotation: 45 } } } }
+    });
+    new Chart(document.getElementById('c2'), {
+      type: 'bar',
+      data: { labels: ["200w/0o/2c/pre+app","200w/50o/2c/pre","200w/50o/2c/pre+app","200w/50o/5c/pre+app","200w/50o/5c/pre","500w/50o/2c/pre+app","200w/0o/2c/pre","500w/0o/2c/pre","500w/0o/2c/pre+app","500w/0o/5c/pre+app","500w/0o/5c/pre","200w/0o/5c/pre+app","500w/50o/2c/pre","200w/0o/5c/pre","500w/50o/5c/pre","500w/50o/5c/pre+app"], datasets: [{ data: [1.4444444444444444,1.4444444444444444,1.4444444444444444,1.4444444444444444,1.5555555555555556,1.8888888888888888,2,1.25,1.25,1.25,1.5,1.75,1.875,2.125,2.125,2.25], backgroundColor: '#38bdf8' }] },
+      options: { plugins: { legend: { display: false }, title: { display: true, text: 'Avg Rank (lower=better)', color: '#e2e8f0' } }, scales: { y: { max: 5, ticks: { color: '#94a3b8' } }, x: { ticks: { color: '#94a3b8', maxRotation: 45 } } } }
+    });
+  </script>
+</body>
+</html>
