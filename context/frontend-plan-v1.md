@@ -1,14 +1,32 @@
 # Corrado RAG — Frontend Build Plan
 
-**Version**: 1.0  
+**Version**: 1.1  
 **Last Updated**: December 2024  
-**Status**: Planning Phase
+**Status**: Ready for Implementation
 
 ---
 
 ## Executive Summary
 
 This document outlines the complete frontend build plan for Corrado RAG, a document Q&A system with intelligent ingestion. The frontend consists of three core areas: **Chat** (Q&A with source citations), **Training** (document ingestion), and **Settings** (configuration). The design uses a minimal charcoal-on-beige aesthetic with streaming responses and source attribution similar to Claude's interface.
+
+---
+
+## Architecture Overview
+
+```
+app/                    → Routes (URLs users visit) + API endpoints
+components/             → Reusable UI building blocks
+src/                    → Backend logic (pipelines + database utilities)
+```
+
+| Directory | What's in it | Who uses it |
+|-----------|-------------|-------------|
+| `app/` | Pages + API routes | Users visit these, frontend calls API |
+| `components/` | Visual building blocks | Pages assemble these |
+| `src/file-client/` | Ingestion pipeline | API routes call this |
+| `src/chat-client/` | RAG pipeline | API routes call this |
+| `src/lib/` | Shared database ops (settings, templates) | API routes call this |
 
 ---
 
@@ -148,8 +166,7 @@ components/chat/
 ├── MessageBubble.tsx       # Single message (user or assistant)
 ├── MessageInput.tsx        # Input bar with send button
 ├── SourcesDropdown.tsx     # Expandable sources section
-├── SourceCard.tsx          # Individual chunk display
-└── StreamingText.tsx       # Handles word-by-word display
+└── SourceCard.tsx          # Individual chunk display
 ```
 
 ---
@@ -392,14 +409,14 @@ Sectioned panels, each collapsible or always visible.
 │  │  MODEL SELECTION (Coming Soon)                            │ │
 │  │                                                           │ │
 │  │  Chat Model                                               │ │
-│  │  ┌──────────────────────────────────┐                    │ │
-│  │  │  Claude Sonnet 4 (claude-sonnet-4-20250514)   🔒     │ │
-│  │  └──────────────────────────────────┘                    │ │
+│  │  ┌──────────────────────────────────────────────┐        │ │
+│  │  │  Claude Sonnet 4 (claude-sonnet-4-20250514)  🔒       │ │
+│  │  └──────────────────────────────────────────────┘        │ │
 │  │                                                           │ │
 │  │  Embedding Model                                          │ │
-│  │  ┌──────────────────────────────────┐                    │ │
-│  │  │  text-embedding-3-small          🔒                  │ │
-│  │  └──────────────────────────────────┘                    │ │
+│  │  ┌──────────────────────────────────────────────┐        │ │
+│  │  │  text-embedding-3-small                      🔒       │ │
+│  │  └──────────────────────────────────────────────┘        │ │
 │  │                                                           │ │
 │  │  Model selection will be available in a future update.   │ │
 │  │                                                           │ │
@@ -573,6 +590,8 @@ For v1, we display `full_text` in document details. For v2, we can populate `fil
 
 ## API Routes
 
+All routes live in `app/api/`. Each `route.ts` file handles multiple HTTP methods (GET, POST, PUT, DELETE) based on the request.
+
 ### Chat
 | Route | Method | Purpose |
 |-------|--------|---------|
@@ -600,22 +619,22 @@ data: {"type": "done", "sources": [...], "conversationId": "uuid"}
 |-------|--------|---------|
 | `/api/conversations` | GET | List user's conversations |
 | `/api/conversations` | POST | Create new conversation |
-| `/api/conversations/[id]` | DELETE | Delete conversation |
+| `/api/conversations` | DELETE | Delete conversation (pass id in body) |
 
 ### Documents
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/api/documents` | GET | List user's trained documents |
-| `/api/documents/[id]` | GET | Get document details |
-| `/api/documents/[id]` | DELETE | Delete document + chunks |
+| `/api/documents` | GET | Get document details (pass id as query param) |
+| `/api/documents` | DELETE | Delete document + chunks (pass id in body) |
 
 ### Upload/Ingestion
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/api/upload` | POST | Upload file, start ingestion |
-| `/api/upload/[id]/status` | GET | Poll ingestion progress + chips |
-| `/api/upload/[id]/cancel` | POST | Cancel ingestion, cleanup partial data |
-| `/api/upload/[id]/chips` | PUT | Add/update custom chips before completion |
+| `/api/upload` | GET | Poll ingestion progress + chips (pass id as query param) |
+| `/api/upload` | DELETE | Cancel ingestion, cleanup partial data (pass id in body) |
+| `/api/upload` | PUT | Add/update custom chips (pass id + chips in body) |
 
 **Upload Request:** FormData with file
 **Status Response:**
@@ -653,8 +672,8 @@ data: {"type": "done", "sources": [...], "conversationId": "uuid"}
 |-------|--------|---------|
 | `/api/templates` | GET | List all file type templates |
 | `/api/templates` | POST | Create new template |
-| `/api/templates/[id]` | PUT | Update template |
-| `/api/templates/[id]` | DELETE | Delete template |
+| `/api/templates` | PUT | Update template (pass id in body) |
+| `/api/templates` | DELETE | Delete template (pass id in body) |
 
 ### Settings
 | Route | Method | Purpose |
@@ -666,7 +685,9 @@ data: {"type": "done", "sources": [...], "conversationId": "uuid"}
 
 ## Backend Code Changes Required
 
-### 1. `src/chat-client/orchestrator.ts`
+### Changes to Existing Files
+
+#### 1. `src/chat-client/orchestrator.ts`
 **Current:** Returns `chunksUsed` count only
 **Change:** Return full chunk data for source citations
 ```typescript
@@ -680,7 +701,7 @@ sources: Array<{
 }>;
 ```
 
-### 2. `src/chat-client/retrieval.ts`
+#### 2. `src/chat-client/retrieval.ts`
 **Current:** Hardcoded `CHUNKS_TO_RETRIEVE = 5` and `SIMILARITY_THRESHOLD = 0.0`
 **Change:** Accept these as parameters from user settings
 ```typescript
@@ -693,7 +714,7 @@ export async function retrieveChunks(
 ): Promise<RetrievalResult>
 ```
 
-### 3. `src/chat-client/prompt.ts`
+#### 3. `src/chat-client/prompt.ts`
 **Current:** Hardcoded `SYSTEM_PROMPT` constant
 **Change:** Accept system prompt as parameter
 ```typescript
@@ -705,7 +726,7 @@ export function buildPrompt(
 ): BuiltPrompt
 ```
 
-### 4. `src/chat-client/llm.ts`
+#### 4. `src/chat-client/llm.ts`
 **Current:** Hardcoded `CLAUDE_MODEL = 'claude-sonnet-4-20250514'`
 **Change:** Accept model as parameter (prep for v2)
 ```typescript
@@ -718,35 +739,7 @@ export async function generateResponse(
 ): Promise<LLMResponse>
 ```
 
-### 5. New: `src/chat-client/stream.ts`
-**Purpose:** Handle streaming responses for the chat API
-```typescript
-export async function streamResponse(
-  systemPrompt: string,
-  messages: PromptMessage[],
-  onToken: (token: string) => void,
-  options?: { model?: string }
-): Promise<void>
-```
-
-### 6. New: `src/lib/settings.ts`
-**Purpose:** CRUD operations for user settings
-```typescript
-export async function getUserSettings(userId: string): Promise<UserSettings>
-export async function updateUserSettings(userId: string, settings: Partial<UserSettings>): Promise<void>
-export function getDefaultSettings(): UserSettings
-```
-
-### 7. New: `src/lib/templates.ts`
-**Purpose:** CRUD operations for file type templates
-```typescript
-export async function getTemplates(): Promise<FileTypeTemplate[]>
-export async function createTemplate(template: NewTemplate): Promise<FileTypeTemplate>
-export async function updateTemplate(id: string, updates: Partial<FileTypeTemplate>): Promise<void>
-export async function deleteTemplate(id: string): Promise<void>
-```
-
-### 8. Modify: `src/file-client/orchestrator.ts`
+#### 5. `src/file-client/orchestrator.ts`
 **Current:** Runs synchronously, no progress updates
 **Change:** Support progress callbacks, cancellation, and custom chips
 ```typescript
@@ -761,7 +754,7 @@ export async function ingestDocument(
 ): Promise<IngestionResult>
 ```
 
-### 9. Modify: `src/file-client/chunker.ts`
+#### 6. `src/file-client/chunker.ts`
 **Current:** Only uses chips from classifier
 **Change:** Merge custom chips with auto-extracted chips
 ```typescript
@@ -773,7 +766,7 @@ export function chunkDocument(
 ): ChunkingResult
 ```
 
-### 10. Modify: `src/file-client/save-document.ts`
+#### 7. `src/file-client/save-document.ts`
 **Current:** Saves basic document info
 **Change:** Add custom_chips column support
 ```typescript
@@ -783,7 +776,20 @@ export async function updateDocumentChips(
 ): Promise<void>
 ```
 
-### 11. New: `src/file-client/cancel.ts`
+### New Files to Create
+
+#### 8. `src/chat-client/stream.ts` (NEW)
+**Purpose:** Handle streaming responses for the chat API
+```typescript
+export async function streamResponse(
+  systemPrompt: string,
+  messages: PromptMessage[],
+  onToken: (token: string) => void,
+  options?: { model?: string }
+): Promise<void>
+```
+
+#### 9. `src/file-client/cancel.ts` (NEW)
 **Purpose:** Clean up partial ingestion data on cancel
 ```typescript
 export async function cancelIngestion(documentId: string): Promise<{
@@ -793,113 +799,134 @@ export async function cancelIngestion(documentId: string): Promise<{
 }>
 ```
 
+#### 10. `src/lib/settings.ts` (NEW)
+**Purpose:** CRUD operations for user settings
+```typescript
+export async function getUserSettings(userId: string): Promise<UserSettings>
+export async function updateUserSettings(userId: string, settings: Partial<UserSettings>): Promise<void>
+export function getDefaultSettings(): UserSettings
+```
+
+#### 11. `src/lib/templates.ts` (NEW)
+**Purpose:** CRUD operations for file type templates
+```typescript
+export async function getTemplates(): Promise<FileTypeTemplate[]>
+export async function createTemplate(template: NewTemplate): Promise<FileTypeTemplate>
+export async function updateTemplate(id: string, updates: Partial<FileTypeTemplate>): Promise<void>
+export async function deleteTemplate(id: string): Promise<void>
+```
+
+#### 12. `src/lib/constants.ts` (NEW)
+**Purpose:** Default values and constants
+```typescript
+export const DEFAULT_CHUNKS_PER_QUERY = 5;
+export const DEFAULT_SIMILARITY_THRESHOLD = 0.0;
+export const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant...`;
+export const DEFAULT_CHAT_MODEL = 'claude-sonnet-4-20250514';
+```
+
 ---
 
 ## File Structure
 
 ```
+app/
+├── layout.tsx                    # Root layout with nav, fonts
+├── globals.css                   # Tailwind + custom styles + fonts
+├── page.tsx                      # "/" - redirects to /chat
+│
+├── chat/
+│   └── page.tsx                  # Chat interface (state lives here)
+│
+├── training/
+│   └── page.tsx                  # Training/upload interface (state lives here)
+│
+├── settings/
+│   └── page.tsx                  # Settings panels (state lives here)
+│
+└── api/
+    ├── chat/
+    │   └── route.ts              # POST: streaming chat
+    ├── conversations/
+    │   └── route.ts              # GET, POST, DELETE
+    ├── documents/
+    │   └── route.ts              # GET, DELETE
+    ├── upload/
+    │   └── route.ts              # POST, GET, PUT, DELETE
+    ├── settings/
+    │   └── route.ts              # GET, PUT
+    └── templates/
+        └── route.ts              # GET, POST, PUT, DELETE
+
+components/
+├── layout/
+│   └── Navigation.tsx            # Top nav bar
+│
+├── chat/
+│   ├── ChatWindow.tsx            # Message thread container
+│   ├── MessageBubble.tsx         # Single message
+│   ├── MessageInput.tsx          # Input bar
+│   ├── SourcesDropdown.tsx       # Expandable sources
+│   └── SourceCard.tsx            # Single source chunk
+│
+├── training/
+│   ├── FileDropzone.tsx          # Upload area
+│   ├── ProcessingQueue.tsx       # Queue container
+│   ├── ProcessingItem.tsx        # Single file with cancel [X]
+│   ├── StageAnimation.tsx        # Animated stage text
+│   ├── ChipsDisplay.tsx          # Auto-extracted chips (read-only)
+│   ├── CustomChipInput.tsx       # Add custom key-value chip
+│   ├── TrainedDocuments.tsx      # Document grid
+│   ├── DocumentCard.tsx          # Single document
+│   └── DocumentDetailModal.tsx   # Details + edit custom chips
+│
+├── settings/
+│   ├── SettingsSection.tsx       # Section wrapper
+│   ├── RetrievalSettings.tsx     # Chunks/threshold
+│   ├── SystemPromptEditor.tsx    # Prompt textarea
+│   ├── ModelSelector.tsx         # Model dropdown
+│   ├── TemplateList.tsx          # Template list
+│   ├── TemplateCard.tsx          # Single template
+│   └── TemplateEditModal.tsx     # Create/edit modal
+│
+└── ui/
+    ├── Button.tsx                # Styled button
+    ├── Input.tsx                 # Styled input
+    ├── Textarea.tsx              # Styled textarea
+    ├── Select.tsx                # Styled select
+    ├── Modal.tsx                 # Modal wrapper
+    ├── Card.tsx                  # Card wrapper
+    └── Spinner.tsx               # Loading spinner
+
 src/
-├── app/
-│   ├── page.tsx                    # Redirect to /chat
-│   ├── layout.tsx                  # Root layout with nav, fonts, providers
-│   ├── globals.css                 # Tailwind + custom styles + fonts
-│   │
-│   ├── chat/
-│   │   └── page.tsx                # Chat interface
-│   │
-│   ├── training/
-│   │   └── page.tsx                # Training/upload interface
-│   │
-│   ├── settings/
-│   │   └── page.tsx                # Settings panels
-│   │
-│   └── api/
-│       ├── chat/
-│       │   └── route.ts            # Streaming chat endpoint
-│       ├── conversations/
-│       │   ├── route.ts            # List/create conversations
-│       │   └── [id]/
-│       │       └── route.ts        # Delete conversation
-│       ├── documents/
-│       │   ├── route.ts            # List documents
-│       │   └── [id]/
-│       │       └── route.ts        # Get/delete document
-│       ├── upload/
-│       │   ├── route.ts            # Upload file
-│       │   └── [id]/
-│       │       ├── status/
-│       │       │   └── route.ts    # Poll ingestion status + chips
-│       │       ├── cancel/
-│       │       │   └── route.ts    # Cancel ingestion
-│       │       └── chips/
-│       │           └── route.ts    # Update custom chips
-│       ├── templates/
-│       │   ├── route.ts            # List/create templates
-│       │   └── [id]/
-│       │       └── route.ts        # Update/delete template
-│       └── settings/
-│           └── route.ts            # Get/update settings
+├── file-client/                  # Ingestion pipeline (self-contained)
+│   ├── orchestrator.ts           # MODIFY: add progress, cancel, custom chips
+│   ├── extractor.ts
+│   ├── cleaner.ts
+│   ├── classifier.ts
+│   ├── chunker.ts                # MODIFY: accept custom chips
+│   ├── embedder.ts
+│   ├── save-document.ts          # MODIFY: add updateDocumentChips
+│   ├── save-chunks.ts
+│   └── cancel.ts                 # NEW: cancellation logic
 │
-├── components/
-│   ├── layout/
-│   │   ├── Navigation.tsx          # Top nav bar
-│   │   └── PageContainer.tsx       # Consistent page wrapper
-│   │
-│   ├── chat/
-│   │   ├── ChatWindow.tsx          # Message thread container
-│   │   ├── MessageBubble.tsx       # Single message
-│   │   ├── MessageInput.tsx        # Input bar
-│   │   ├── SourcesDropdown.tsx     # Expandable sources
-│   │   ├── SourceCard.tsx          # Single source chunk
-│   │   └── StreamingText.tsx       # Streaming display
-│   │
-│   ├── training/
-│   │   ├── FileDropzone.tsx        # Upload area
-│   │   ├── ProcessingQueue.tsx     # Queue container
-│   │   ├── ProcessingItem.tsx      # Single file with cancel [X]
-│   │   ├── StageAnimation.tsx      # Animated stage text
-│   │   ├── ChipsDisplay.tsx        # Auto-extracted chips (read-only)
-│   │   ├── CustomChipInput.tsx     # Add custom key-value chip
-│   │   ├── TrainedDocuments.tsx    # Document grid
-│   │   ├── DocumentCard.tsx        # Single document
-│   │   └── DocumentDetailModal.tsx # Details + edit custom chips
-│   │
-│   ├── settings/
-│   │   ├── SettingsSection.tsx     # Section wrapper
-│   │   ├── RetrievalSettings.tsx   # Chunks/threshold
-│   │   ├── SystemPromptEditor.tsx  # Prompt textarea
-│   │   ├── ModelSelector.tsx       # Model dropdown
-│   │   ├── TemplateList.tsx        # Template list
-│   │   ├── TemplateCard.tsx        # Single template
-│   │   └── TemplateEditModal.tsx   # Create/edit modal
-│   │
-│   └── ui/
-│       ├── Button.tsx              # Styled button
-│       ├── Input.tsx               # Styled input
-│       ├── Textarea.tsx            # Styled textarea
-│       ├── Select.tsx              # Styled select
-│       ├── Modal.tsx               # Modal wrapper
-│       ├── Card.tsx                # Card wrapper
-│       └── Spinner.tsx             # Loading spinner
+├── chat-client/                  # RAG pipeline (self-contained)
+│   ├── orchestrator.ts           # MODIFY: return full sources
+│   ├── retrieval.ts              # MODIFY: accept options
+│   ├── get-history.ts
+│   ├── prompt.ts                 # MODIFY: accept custom system prompt
+│   ├── llm.ts                    # MODIFY: accept model option
+│   ├── stream.ts                 # NEW: streaming support
+│   └── save-message.ts
 │
-├── hooks/
-│   ├── useChat.ts                  # Chat state + streaming
-│   ├── useDocuments.ts             # Document list + custom chips
-│   ├── useUpload.ts                # Upload + progress + cancel + chips
-│   ├── useSettings.ts              # Settings state
-│   └── useTemplates.ts             # Template CRUD
+├── lib/                          # Shared database operations
+│   ├── settings.ts               # NEW: user_settings CRUD
+│   ├── templates.ts              # NEW: file_type_templates CRUD
+│   └── constants.ts              # NEW: default values
 │
-├── lib/
-│   ├── settings.ts                 # Settings operations
-│   ├── templates.ts                # Template operations
-│   └── constants.ts                # Default values
-│
-├── chat-client/                    # (existing, with modifications)
-├── file-client/                    # (existing, with modifications)
-│   └── cancel.ts                   # NEW: Cancel ingestion + cleanup
-├── supabase.ts                     # (existing)
+├── supabase.ts
 └── types/
-    └── index.ts                    # (existing + new frontend types)
+    └── index.ts                  # Add new types for settings, etc.
 ```
 
 ---
@@ -910,67 +937,71 @@ src/
 1. Set up fonts (Array, Khand) in layout
 2. Create globals.css with color variables
 3. Build Navigation component
-4. Build PageContainer component
-5. Create basic page shells for /chat, /training, /settings
-6. Verify routing works
+4. Create basic page shells for /chat, /training, /settings
+5. Verify routing works
 
 ### Phase 2: Database + Settings (Day 1-2)
-7. Create `users` table + default user
-8. Create `user_settings` table
-9. Add `user_id` to conversations and documents
-10. Build settings API routes
+6. Run database migrations (users, user_settings, alter conversations/documents)
+7. Create `src/lib/settings.ts`
+8. Create `src/lib/templates.ts`
+9. Create `src/lib/constants.ts`
+10. Build settings API route
 11. Build settings page UI
 12. Test settings save/load
 
 ### Phase 3: Chat Core (Day 2-3)
-13. Modify orchestrator to return sources
-14. Build streaming support in llm.ts
-15. Build chat API route with streaming
-16. Build ChatWindow, MessageBubble components
-17. Build MessageInput component
-18. Wire up basic chat (no sources yet)
-19. Test streaming works
+13. Modify `src/chat-client/orchestrator.ts` to return sources
+14. Modify `src/chat-client/retrieval.ts` to accept options
+15. Modify `src/chat-client/prompt.ts` to accept custom prompt
+16. Create `src/chat-client/stream.ts` for streaming
+17. Build chat API route with streaming
+18. Build ChatWindow, MessageBubble components
+19. Build MessageInput component
+20. Wire up basic chat (no sources yet)
+21. Test streaming works
 
 ### Phase 4: Chat Sources (Day 3)
-20. Build SourcesDropdown component
-21. Build SourceCard component
-22. Add sources to chat response
-23. Test source display
-24. Add conversation management (new chat button)
+22. Build SourcesDropdown component
+23. Build SourceCard component
+24. Add sources to chat response
+25. Test source display
+26. Add conversation management (new chat button)
 
 ### Phase 5: Training Core (Day 4)
-25. Build FileDropzone component
-26. Build upload API route
-27. Build ProcessingQueue, ProcessingItem components (with [X] cancel)
-28. Build StageAnimation component
-29. Build cancel API route + backend support
-30. Wire up file upload + processing + cancellation
-31. Test basic ingestion with cancel
+27. Build FileDropzone component
+28. Build upload API route
+29. Build ProcessingQueue, ProcessingItem components (with [X] cancel)
+30. Build StageAnimation component
+31. Create `src/file-client/cancel.ts`
+32. Modify `src/file-client/orchestrator.ts` for progress/cancel
+33. Wire up file upload + processing + cancellation
+34. Test basic ingestion with cancel
 
 ### Phase 6: Training Polish (Day 4-5)
-32. Build ChipsDisplay component (auto-extracted, read-only)
-33. Build CustomChipInput component (add key-value pairs)
-34. Wire up custom chips to status polling + save
-35. Build TrainedDocuments grid
-36. Build DocumentCard, DocumentDetailModal (with custom chip editing)
-37. Build documents API routes
-38. Wire up document list + delete + custom chip updates
-39. Test full training flow with custom identifiers
+35. Build ChipsDisplay component (auto-extracted, read-only)
+36. Build CustomChipInput component (add key-value pairs)
+37. Modify `src/file-client/chunker.ts` for custom chips
+38. Wire up custom chips to status polling + save
+39. Build TrainedDocuments grid
+40. Build DocumentCard, DocumentDetailModal (with custom chip editing)
+41. Build documents API route
+42. Wire up document list + delete + custom chip updates
+43. Test full training flow with custom identifiers
 
 ### Phase 7: Templates (Day 5)
-40. Build templates API routes
-41. Build TemplateList, TemplateCard components
-42. Build TemplateEditModal
-43. Wire up template CRUD
-44. Test template management
+44. Build templates API route
+45. Build TemplateList, TemplateCard components
+46. Build TemplateEditModal
+47. Wire up template CRUD
+48. Test template management
 
 ### Phase 8: Polish (Day 6)
-45. Error handling throughout
-46. Loading states everywhere
-47. Empty states (no documents, no conversations)
-48. Mobile responsiveness check
-49. Final style tweaks
-50. Code cleanup + comments
+49. Error handling throughout
+50. Loading states everywhere
+51. Empty states (no documents, no conversations)
+52. Mobile responsiveness check
+53. Final style tweaks
+54. Code cleanup + comments
 
 ---
 
