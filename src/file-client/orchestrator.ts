@@ -35,6 +35,7 @@ import { embedChunks, EmbeddingResult } from './embedder';
 import type { EmbeddedChunk } from './embedder';
 import { createDocument, updateDocumentComplete, updateDocumentError } from './save-document';
 import { saveChunks } from './save-chunks';
+import type { Chips } from '../types';
 
 // ----------------------------------------------------------------------------
 // TYPES
@@ -54,7 +55,23 @@ export interface IngestionOptions {
   skipSave?: boolean;
   
   // Progress callback for UI updates
-  onProgress?: (stage: IngestionStage, message: string) => void;
+  // stage: current pipeline stage
+  // percent: 0-100 progress estimate
+  // data: optional data like extracted chips
+  onProgress?: (stage: IngestionStage, percent: number, data?: ProgressData) => void;
+  
+  // Use existing document ID instead of creating new one
+  // When provided, skips document creation and uses this ID for saving chunks
+  documentId?: string;
+  
+  // Original filename (use when documentId is provided since filePath may be temp name)
+  fileName?: string;
+  
+  // User-added custom chips to merge with auto-extracted chips
+  customChips?: Chips;
+  
+  // AbortSignal for cancellation support
+  signal?: AbortSignal;
 }
 
 export type IngestionStage = 
@@ -65,7 +82,16 @@ export type IngestionStage =
   | 'chunking'
   | 'embedding'
   | 'saving'
-  | 'complete';
+  | 'complete'
+  | 'cancelled'
+  | 'error';
+
+export interface ProgressData {
+  fileType?: string;
+  chips?: Chips;
+  chunkCount?: number;
+  error?: string;
+}
 
 export interface IngestionResult {
   // Document ID from Supabase (null if skipSave)
@@ -115,6 +141,16 @@ export interface IngestionResult {
 }
 
 // ----------------------------------------------------------------------------
+// HELPER: Check for cancellation
+// ----------------------------------------------------------------------------
+
+function checkCancellation(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error('Ingestion cancelled');
+  }
+}
+
+// ----------------------------------------------------------------------------
 // MAIN EXPORT
 // ----------------------------------------------------------------------------
 
@@ -142,31 +178,47 @@ export async function ingestDocument(
 
   const templates = options.templates || MOCK_TEMPLATES;
   const progress = options.onProgress || (() => {});
-  const fileName = path.basename(filePath);
+  const signal = options.signal;
   
-  let documentId: string | null = null;
+  // Use provided fileName or extract from path
+  const fileName = options.fileName || path.basename(filePath);
+  
+  let documentId: string | null = options.documentId || null;
 
   console.log('\n' + '='.repeat(60));
   console.log('INGESTION PIPELINE');
   console.log('='.repeat(60));
   console.log('\nFile: %s', filePath);
+  console.log('FileName: %s', fileName);
+  console.log('Document ID: %s', documentId || '(will create)');
   console.log('Templates: %s', templates.map(t => t.type_name).join(', '));
+  if (options.customChips) {
+    console.log('Custom chips: %s', JSON.stringify(options.customChips));
+  }
 
   try {
     // -------------------------------------------------------------------------
-    // STAGE 0: CREATE DOCUMENT RECORD
+    // STAGE 0: CREATE OR USE DOCUMENT RECORD
     // -------------------------------------------------------------------------
     if (!options.skipSave) {
       console.log('\n' + '-'.repeat(60));
-      console.log('STAGE 0: CREATE DOCUMENT RECORD');
+      console.log('STAGE 0: DOCUMENT RECORD');
       console.log('-'.repeat(60));
       
-      progress('creating', 'Creating document record...');
+      checkCancellation(signal);
       
-      const doc = await createDocument(fileName);
-      documentId = doc.id;
-      
-      console.log('✓ Created document: %s', documentId);
+      if (documentId) {
+        // Use existing document ID (created by upload API)
+        console.log('✓ Using existing document: %s', documentId);
+        progress('creating', 5);
+      } else {
+        // Create new document record
+        progress('creating', 0);
+        const doc = await createDocument(fileName);
+        documentId = doc.id;
+        console.log('✓ Created document: %s', documentId);
+        progress('creating', 5);
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -176,7 +228,8 @@ export async function ingestDocument(
     console.log('STAGE 1: EXTRACTION');
     console.log('-'.repeat(60));
     
-    progress('extracting', 'Extracting text from document...');
+    checkCancellation(signal);
+    progress('extracting', 5);
     const extractStart = Date.now();
     
     const rawText = await extractText(filePath);
@@ -187,6 +240,8 @@ export async function ingestDocument(
 
     // Always vision now
     const extractionMethod = 'vision' as const;
+    
+    progress('extracting', 70);
 
     // -------------------------------------------------------------------------
     // STAGE 2: CLEANING
@@ -195,7 +250,8 @@ export async function ingestDocument(
     console.log('STAGE 2: CLEANING');
     console.log('-'.repeat(60));
     
-    progress('cleaning', 'Cleaning and normalizing text...');
+    checkCancellation(signal);
+    progress('cleaning', 72);
     const cleanStart = Date.now();
     
     const cleanedText = cleanText(rawText);
@@ -204,6 +260,8 @@ export async function ingestDocument(
     timing.cleaning = Date.now() - cleanStart;
     console.log('✓ Cleaned to %d characters (%s reduction) in %sms', 
       cleanedText.length, cleaningStats.reduction, timing.cleaning);
+    
+    progress('cleaning', 75);
 
     // -------------------------------------------------------------------------
     // STAGE 3: CLASSIFICATION
@@ -212,7 +270,8 @@ export async function ingestDocument(
     console.log('STAGE 3: CLASSIFICATION');
     console.log('-'.repeat(60));
     
-    progress('classifying', 'Classifying document and extracting metadata...');
+    checkCancellation(signal);
+    progress('classifying', 75);
     const classifyStart = Date.now();
     
     const classification = await classifyDocument(cleanedText, templates);
@@ -222,6 +281,12 @@ export async function ingestDocument(
       classification.file_type, 
       (classification.confidence * 100).toFixed(0),
       (timing.classification / 1000).toFixed(1));
+    
+    // Report classification results including chips
+    progress('classifying', 80, { 
+      fileType: classification.file_type, 
+      chips: classification.chips 
+    });
 
     // -------------------------------------------------------------------------
     // STAGE 4: CHUNKING
@@ -230,12 +295,23 @@ export async function ingestDocument(
     console.log('STAGE 4: CHUNKING');
     console.log('-'.repeat(60));
     
-    progress('chunking', 'Splitting into chunks...');
+    checkCancellation(signal);
+    progress('chunking', 82);
     const chunkStart = Date.now();
+    
+    // Merge auto-extracted chips with custom chips (custom takes precedence)
+    const mergedChips: Chips = {
+      ...classification.chips,
+      ...(options.customChips || {}),
+    };
+    
+    if (options.customChips && Object.keys(options.customChips).length > 0) {
+      console.log('Merged chips with %d custom fields', Object.keys(options.customChips).length);
+    }
     
     const chunkingResult = chunkDocument(
       cleanedText, 
-      classification.chips, 
+      mergedChips, 
       options.chunkerOptions
     );
     
@@ -244,6 +320,8 @@ export async function ingestDocument(
       chunkingResult.totalChunks, 
       chunkingResult.averageWords,
       timing.chunking);
+    
+    progress('chunking', 88, { chunkCount: chunkingResult.totalChunks });
 
     // -------------------------------------------------------------------------
     // STAGE 5: EMBEDDING (optional)
@@ -256,7 +334,8 @@ export async function ingestDocument(
       console.log('STAGE 5: EMBEDDING');
       console.log('-'.repeat(60));
       
-      progress('embedding', 'Generating vector embeddings...');
+      checkCancellation(signal);
+      progress('embedding', 90);
       const embedStart = Date.now();
       
       embeddingResult = await embedChunks(chunkingResult.chunks);
@@ -268,6 +347,8 @@ export async function ingestDocument(
         embeddingResult.totalTokens,
         embeddingResult.estimatedCost,
         (timing.embedding / 1000).toFixed(1));
+      
+      progress('embedding', 95);
     } else {
       console.log('\n[SKIPPED] Embedding stage (skipEmbedding=true)');
     }
@@ -280,7 +361,8 @@ export async function ingestDocument(
       console.log('STAGE 6: SAVE TO SUPABASE');
       console.log('-'.repeat(60));
       
-      progress('saving', 'Saving to database...');
+      checkCancellation(signal);
+      progress('saving', 96);
       const saveStart = Date.now();
       
       // Save chunks with embeddings
@@ -292,6 +374,8 @@ export async function ingestDocument(
       timing.saving = Date.now() - saveStart;
       console.log('✓ Saved %d chunks to database in %sms', 
         chunkingResult.totalChunks, timing.saving);
+      
+      progress('saving', 99);
     } else if (options.skipSave) {
       console.log('\n[SKIPPED] Save stage (skipSave=true)');
     }
@@ -309,7 +393,11 @@ export async function ingestDocument(
       console.log('Document ID: %s', documentId);
     }
     
-    progress('complete', 'Ingestion complete');
+    progress('complete', 100, { 
+      fileType: classification.file_type,
+      chips: mergedChips,
+      chunkCount: chunkingResult.totalChunks
+    });
 
     return {
       documentId,
@@ -326,7 +414,10 @@ export async function ingestDocument(
         reduction: cleaningStats.reduction,
       },
       
-      classification,
+      classification: {
+        ...classification,
+        chips: mergedChips,  // Return merged chips
+      },
       
       chunking: {
         totalChunks: chunkingResult.totalChunks,
@@ -345,8 +436,10 @@ export async function ingestDocument(
     };
 
   } catch (error) {
-    // Mark document as failed if we created one
-    if (documentId) {
+    const isCancelled = signal?.aborted || (error instanceof Error && error.message === 'Ingestion cancelled');
+    
+    // Mark document as failed if we have one
+    if (documentId && !options.skipSave) {
       try {
         await updateDocumentError(documentId);
         console.error('\n[ERROR] Pipeline failed, document marked as error');
@@ -354,6 +447,13 @@ export async function ingestDocument(
         console.error('\n[ERROR] Failed to update document status:', updateError);
       }
     }
+    
+    if (isCancelled) {
+      progress('cancelled', 0, { error: 'Ingestion cancelled by user' });
+    } else {
+      progress('error', 0, { error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+    
     throw error;
   }
 }

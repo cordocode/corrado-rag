@@ -4,18 +4,19 @@
 //
 // POST /api/upload - Upload file and start ingestion
 // GET /api/upload?id= - Poll ingestion status
-// PUT /api/upload - Update custom chips
+// PUT /api/upload - Update custom chips (triggers reprocessing)
 // DELETE /api/upload - Cancel ingestion
 //
 // ============================================================================
 
 import { NextRequest } from 'next/server';
-import { writeFile, mkdir, unlink, readdir, rm } from 'fs/promises';
+import { writeFile, mkdir, unlink, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { supabase } from '@/src/supabase';
 import { DEFAULT_USER_ID } from '@/src/lib/constants';
-import { ingestDocument } from '@/src/file-client/orchestrator';
+import { ingestDocument, IngestionStage, ProgressData } from '@/src/file-client/orchestrator';
+import { reprocessDocument, ReprocessStage } from '@/src/file-client/reprocess';
 import { cancelIngestion } from '@/src/file-client/cancel';
 
 // ----------------------------------------------------------------------------
@@ -23,7 +24,7 @@ import { cancelIngestion } from '@/src/file-client/cancel';
 // ----------------------------------------------------------------------------
 
 interface UploadStatus {
-  status: 'pending' | 'processing' | 'complete' | 'error' | 'cancelled';
+  status: 'pending' | 'processing' | 'reprocessing' | 'complete' | 'error' | 'cancelled';
   progress: number;
   stage: string;
   documentId: string;
@@ -36,6 +37,9 @@ interface UploadStatus {
 
 // In-memory progress tracking (for v1 - would use Redis/DB in production)
 const progressMap = new Map<string, UploadStatus>();
+
+// AbortController map for cancellation support
+const abortControllers = new Map<string, AbortController>();
 
 // ----------------------------------------------------------------------------
 // POST - Upload file and start ingestion
@@ -100,7 +104,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     progressMap.set(documentId, {
       status: 'processing',
       progress: 0,
-      stage: 'Reading document...',
+      stage: 'Starting...',
       documentId,
       fileName,
       fileType: null,
@@ -108,8 +112,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       customChips: {},
     });
 
+    // Create AbortController for this ingestion
+    const abortController = new AbortController();
+    abortControllers.set(documentId, abortController);
+
     // Start ingestion in background (don't await)
-    runIngestion(documentId, filePath, fileName, extension);
+    runIngestion(documentId, filePath, fileName, abortController.signal);
 
     return new Response(
       JSON.stringify({
@@ -157,7 +165,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     // Fall back to database
     const { data: doc, error } = await supabase
       .from('documents')
-      .select('id, original_name, file_type, status, custom_chips')
+      .select('id, original_name, file_type, status, auto_chips, custom_chips')
       .eq('id', documentId)
       .single();
 
@@ -175,7 +183,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       documentId: doc.id,
       fileName: doc.original_name,
       fileType: doc.file_type,
-      extractedChips: {},
+      extractedChips: doc.auto_chips || {},
       customChips: doc.custom_chips || {},
     };
 
@@ -194,7 +202,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 }
 
 // ----------------------------------------------------------------------------
-// PUT - Update custom chips
+// PUT - Update custom chips (triggers reprocessing)
 // ----------------------------------------------------------------------------
 
 export async function PUT(request: NextRequest): Promise<Response> {
@@ -208,27 +216,68 @@ export async function PUT(request: NextRequest): Promise<Response> {
       );
     }
 
-    const { id, customChips } = body;
+    const { id: documentId, customChips } = body;
+    const newCustomChips = customChips || {};
 
-    const { data, error } = await supabase
+    console.log('[UPLOAD API] PUT chips for %s: %s', documentId, JSON.stringify(newCustomChips));
+
+    // Fetch current document state
+    const { data: doc, error: fetchError } = await supabase
       .from('documents')
-      .update({ custom_chips: customChips || {} })
-      .eq('id', id)
-      .select()
+      .select('id, original_name, file_type, status, auto_chips, custom_chips')
+      .eq('id', documentId)
       .single();
 
-    if (error) {
-      throw new Error(`Failed to update: ${error.message}`);
+    if (fetchError || !doc) {
+      return new Response(
+        JSON.stringify({ error: 'Document not found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
-    // Update in-memory if exists
-    const progress = progressMap.get(id);
-    if (progress) {
-      progress.customChips = customChips || {};
+    // Check if chips actually changed
+    const currentCustomChips = doc.custom_chips || {};
+    const chipsChanged = JSON.stringify(currentCustomChips) !== JSON.stringify(newCustomChips);
+
+    if (!chipsChanged) {
+      console.log('[UPLOAD API] Chips unchanged, skipping reprocess');
+      return new Response(JSON.stringify({
+        documentId,
+        status: 'complete',
+        message: 'No changes detected',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
-    return new Response(JSON.stringify(data), {
-      status: 200,
+    // Initialize progress tracking for reprocessing
+    progressMap.set(documentId, {
+      status: 'reprocessing',
+      progress: 0,
+      stage: 'Updating chips...',
+      documentId,
+      fileName: doc.original_name,
+      fileType: doc.file_type,
+      extractedChips: doc.auto_chips || {},
+      customChips: newCustomChips,
+    });
+
+    // Update document status to reprocessing
+    await supabase
+      .from('documents')
+      .update({ status: 'reprocessing' })
+      .eq('id', documentId);
+
+    // Start reprocessing in background (don't await)
+    runReprocess(documentId, newCustomChips);
+
+    return new Response(JSON.stringify({
+      documentId,
+      status: 'reprocessing',
+      message: 'Reprocessing started',
+    }), {
+      status: 202,
       headers: { 'Content-Type': 'application/json' },
     });
 
@@ -258,6 +307,14 @@ export async function DELETE(request: NextRequest): Promise<Response> {
 
     const documentId = body.id;
     console.log('[UPLOAD API] Cancelling: %s', documentId);
+
+    // Abort the running ingestion if possible
+    const abortController = abortControllers.get(documentId);
+    if (abortController) {
+      abortController.abort();
+      abortControllers.delete(documentId);
+      console.log('[UPLOAD API] Sent abort signal');
+    }
 
     // Update progress map
     const progress = progressMap.get(documentId);
@@ -318,22 +375,10 @@ async function runIngestion(
   documentId: string,
   filePath: string,
   fileName: string,
-  extension: string
+  signal: AbortSignal
 ): Promise<void> {
   const progress = progressMap.get(documentId);
   if (!progress) return;
-
-  // Estimate based on file type - PDFs take much longer due to OCR
-  const isPdf = extension === '.pdf';
-  
-  // Progress phases:
-  // 0-70%: Extraction (slow, linear - this is the long part for PDFs)
-  // 70-80%: Classification
-  // 80-90%: Chunking  
-  // 90-95%: Embedding
-  // 95-100%: Saving
-
-  let extractionInterval: ReturnType<typeof setInterval> | null = null;
 
   try {
     // Update status to processing
@@ -342,57 +387,76 @@ async function runIngestion(
       .update({ status: 'processing' })
       .eq('id', documentId);
 
-    // Start slow extraction progress (0-70%)
-    // For PDFs this simulates the page-by-page OCR
-    // For TXT files, move faster
-    const extractionDuration = isPdf ? 120000 : 5000; // 2 min for PDF, 5s for TXT
-    const extractionTicks = extractionDuration / 500; // tick every 500ms
-    const progressPerTick = 70 / extractionTicks;
-    
-    progress.stage = isPdf ? 'Extracting text from pages...' : 'Reading document...';
-    
-    extractionInterval = setInterval(() => {
-      if (progress.status !== 'processing') {
-        if (extractionInterval) clearInterval(extractionInterval);
-        return;
-      }
-      if (progress.progress < 70) {
-        progress.progress = Math.min(70, progress.progress + progressPerTick);
-      }
-    }, 500);
-
-    // Run actual ingestion
+    // Run actual ingestion with all the proper parameters
     const result = await ingestDocument(filePath, {
-      onProgress: (stage: string) => {
+      documentId: documentId,
+      fileName: fileName,
+      signal: signal,
+      onProgress: (stage: IngestionStage, percent: number, data?: ProgressData) => {
         if (progress.status !== 'processing') return;
         
-        // Clear extraction interval once we get real progress
-        if (extractionInterval) {
-          clearInterval(extractionInterval);
-          extractionInterval = null;
-        }
+        progress.progress = percent;
         
-        if (stage === 'classifying') {
-          progress.progress = 72;
-          progress.stage = 'Identifying document type...';
-        } else if (stage === 'chunking') {
-          progress.progress = 82;
-          progress.stage = 'Breaking into knowledge pieces...';
-        } else if (stage === 'embedding') {
-          progress.progress = 90;
-          progress.stage = 'Building semantic connections...';
-        } else if (stage === 'saving') {
-          progress.progress = 96;
-          progress.stage = 'Finalizing training...';
+        // Map stage to user-friendly message
+        switch (stage) {
+          case 'creating':
+            progress.stage = 'Preparing document...';
+            break;
+          case 'extracting':
+            progress.stage = 'Extracting text from pages...';
+            break;
+          case 'cleaning':
+            progress.stage = 'Cleaning and normalizing...';
+            break;
+          case 'classifying':
+            progress.stage = 'Identifying document type...';
+            if (data?.fileType) {
+              progress.fileType = data.fileType;
+            }
+            if (data?.chips) {
+              progress.extractedChips = data.chips;
+            }
+            break;
+          case 'chunking':
+            progress.stage = 'Breaking into knowledge pieces...';
+            break;
+          case 'embedding':
+            progress.stage = 'Building semantic connections...';
+            break;
+          case 'saving':
+            progress.stage = 'Finalizing training...';
+            break;
+          case 'complete':
+            progress.stage = 'Complete';
+            if (data?.fileType) {
+              progress.fileType = data.fileType;
+            }
+            if (data?.chips) {
+              progress.extractedChips = data.chips;
+            }
+            break;
+          case 'cancelled':
+            progress.stage = 'Cancelled';
+            progress.status = 'cancelled';
+            break;
+          case 'error':
+            progress.stage = 'Error';
+            progress.status = 'error';
+            if (data?.error) {
+              progress.error = data.error;
+            }
+            break;
         }
       },
     });
 
-    if (extractionInterval) {
-      clearInterval(extractionInterval);
-    }
+    // Save auto_chips to document for future reprocessing
+    await supabase
+      .from('documents')
+      .update({ auto_chips: result.classification.chips })
+      .eq('id', documentId);
 
-    // Update progress with results
+    // Update progress with final results
     progress.status = 'complete';
     progress.progress = 100;
     progress.stage = 'Complete';
@@ -402,22 +466,29 @@ async function runIngestion(
     console.log('[UPLOAD API] Ingestion complete: %s', documentId);
 
   } catch (error) {
-    if (extractionInterval) {
-      clearInterval(extractionInterval);
-    }
+    const isCancelled = signal.aborted;
     
-    console.error('[UPLOAD API] Ingestion error:', error);
-    
-    progress.status = 'error';
-    progress.stage = 'Error';
-    progress.error = error instanceof Error ? error.message : 'Unknown error';
+    if (isCancelled) {
+      console.log('[UPLOAD API] Ingestion cancelled: %s', documentId);
+      progress.status = 'cancelled';
+      progress.stage = 'Cancelled';
+    } else {
+      console.error('[UPLOAD API] Ingestion error:', error);
+      
+      progress.status = 'error';
+      progress.stage = 'Error';
+      progress.error = error instanceof Error ? error.message : 'Unknown error';
 
-    await supabase
-      .from('documents')
-      .update({ status: 'error' })
-      .eq('id', documentId);
+      await supabase
+        .from('documents')
+        .update({ status: 'error' })
+        .eq('id', documentId);
+    }
 
   } finally {
+    // Cleanup abort controller
+    abortControllers.delete(documentId);
+    
     // Cleanup temp upload file
     try {
       if (existsSync(filePath)) {
@@ -443,6 +514,83 @@ async function runIngestion(
     }
 
     // Remove from progress map after delay (allow final poll)
+    setTimeout(() => {
+      progressMap.delete(documentId);
+    }, 30000);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// BACKGROUND REPROCESSING
+// ----------------------------------------------------------------------------
+
+async function runReprocess(
+  documentId: string,
+  customChips: Record<string, string>
+): Promise<void> {
+  const progress = progressMap.get(documentId);
+  if (!progress) return;
+
+  try {
+    const result = await reprocessDocument(documentId, customChips, {
+      onProgress: (stage: ReprocessStage, percent: number) => {
+        if (progress.status !== 'reprocessing') return;
+        
+        progress.progress = percent;
+        
+        switch (stage) {
+          case 'fetching':
+            progress.stage = 'Loading document...';
+            break;
+          case 'chunking':
+            progress.stage = 'Rebuilding chunks...';
+            break;
+          case 'embedding':
+            progress.stage = 'Regenerating embeddings...';
+            break;
+          case 'saving':
+            progress.stage = 'Saving changes...';
+            break;
+          case 'complete':
+            progress.stage = 'Complete';
+            break;
+          case 'error':
+            progress.stage = 'Error';
+            progress.status = 'error';
+            break;
+        }
+      },
+    });
+
+    // Update document status back to complete
+    await supabase
+      .from('documents')
+      .update({ status: 'complete' })
+      .eq('id', documentId);
+
+    // Update progress
+    progress.status = 'complete';
+    progress.progress = 100;
+    progress.stage = 'Complete';
+    progress.customChips = customChips;
+
+    console.log('[UPLOAD API] Reprocess complete: %s (%d → %d chunks)',
+      documentId, result.previousChunkCount, result.newChunkCount);
+
+  } catch (error) {
+    console.error('[UPLOAD API] Reprocess error:', error);
+    
+    progress.status = 'error';
+    progress.stage = 'Error';
+    progress.error = error instanceof Error ? error.message : 'Unknown error';
+
+    await supabase
+      .from('documents')
+      .update({ status: 'error' })
+      .eq('id', documentId);
+
+  } finally {
+    // Remove from progress map after delay
     setTimeout(() => {
       progressMap.delete(documentId);
     }, 30000);
