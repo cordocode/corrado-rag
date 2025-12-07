@@ -5,7 +5,6 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import Navigation from '@/components/layout/Navigation';
 import ChatWindow, { Message } from '@/components/chat/ChatWindow';
 import MessageInput from '@/components/chat/MessageInput';
 import { Source } from '@/components/chat/SourcesDropdown';
@@ -113,19 +112,15 @@ export default function ChatPage(): React.ReactElement {
   }
 
   return (
-    <div className="h-screen flex flex-col">
-      <Navigation />
-      
-      <main className="flex-1 flex flex-col max-w-3xl w-full mx-auto px-6 overflow-hidden">
-        <ChatWindow 
-          messages={messages} 
-          streamingContent={streamingContent}
-        />
-        <MessageInput 
-          onSend={handleSend} 
-          isLoading={isLoading} 
-        />
-      </main>
-    </div>
+    <main className="flex-1 flex flex-col max-w-3xl w-full mx-auto px-6 overflow-hidden">
+      <ChatWindow 
+        messages={messages} 
+        streamingContent={streamingContent}
+      />
+      <MessageInput 
+        onSend={handleSend} 
+        isLoading={isLoading} 
+      />
+    </main>
   );
 }

@@ -13,7 +13,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import SettingsSection from '@/components/settings/SettingsSection';
 import RetrievalSettings from '@/components/settings/RetrievalSettings';
 import SystemPromptEditor from '@/components/settings/SystemPromptEditor';
 import ModelSelector from '@/components/settings/ModelSelector';

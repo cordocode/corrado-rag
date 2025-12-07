@@ -7,11 +7,13 @@
 // - Loads fonts via <link> tag
 // - Imports global styles
 // - Provides the base page structure
+// - Includes persistent Navigation across all pages
 //
 // ============================================================================
 
 import type { Metadata } from 'next';
 import './globals.css';
+import Navigation from '@/components/layout/Navigation';
 
 // ----------------------------------------------------------------------------
 // METADATA
@@ -40,7 +42,8 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-screen">
+      <body className="h-screen flex flex-col">
+        <Navigation />
         {children}
       </body>
     </html>
