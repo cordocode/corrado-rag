@@ -16,7 +16,7 @@ import ProcessingItem from './ProcessingItem';
 // ----------------------------------------------------------------------------
 
 interface UploadStatus {
-  status: 'pending' | 'processing' | 'complete' | 'error' | 'cancelled';
+  status: 'pending' | 'processing' | 'reprocessing' | 'complete' | 'error' | 'cancelled';
   progress: number;
   stage: string;
   documentId: string;
@@ -25,6 +25,8 @@ interface UploadStatus {
   extractedChips: Record<string, string>;
   customChips: Record<string, string>;
   error?: string;
+  currentPage?: number;
+  totalPages?: number;
 }
 
 interface ProcessingQueueProps {
@@ -66,6 +68,8 @@ export default function ProcessingQueue({
             extractedChips={item.extractedChips}
             customChips={item.customChips}
             error={item.error}
+            currentPage={item.currentPage}
+            totalPages={item.totalPages}
             onCancel={onCancel}
             onCustomChipsChange={onCustomChipsChange}
             onDismiss={onDismiss}

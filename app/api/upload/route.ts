@@ -33,6 +33,9 @@ interface UploadStatus {
   extractedChips: Record<string, string>;
   customChips: Record<string, string>;
   error?: string;
+  // Extraction progress details
+  currentPage?: number;
+  totalPages?: number;
 }
 
 // In-memory progress tracking (for v1 - would use Redis/DB in production)
@@ -110,6 +113,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       fileType: null,
       extractedChips: {},
       customChips: {},
+      currentPage: 0,
+      totalPages: 0,
     });
 
     // Create AbortController for this ingestion
@@ -397,13 +402,30 @@ async function runIngestion(
         
         progress.progress = percent;
         
+        // Update page progress if available
+        if (data?.currentPage !== undefined) {
+          progress.currentPage = data.currentPage;
+        }
+        if (data?.totalPages !== undefined) {
+          progress.totalPages = data.totalPages;
+        }
+        
         // Map stage to user-friendly message
         switch (stage) {
           case 'creating':
             progress.stage = 'Preparing document...';
             break;
           case 'extracting':
-            progress.stage = 'Extracting text from pages...';
+            // Show page-level progress during extraction
+            if (progress.totalPages && progress.totalPages > 0) {
+              if (progress.currentPage === 0) {
+                progress.stage = 'Converting PDF to images...';
+              } else {
+                progress.stage = `Extracting text from page ${progress.currentPage} of ${progress.totalPages}...`;
+              }
+            } else {
+              progress.stage = 'Extracting text...';
+            }
             break;
           case 'cleaning':
             progress.stage = 'Cleaning and normalizing...';

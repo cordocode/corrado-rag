@@ -22,7 +22,7 @@ import TrainedDocuments from '@/components/training/TrainedDocuments';
 // ----------------------------------------------------------------------------
 
 interface UploadStatus {
-  status: 'pending' | 'processing' | 'complete' | 'error' | 'cancelled';
+  status: 'pending' | 'processing' | 'reprocessing' | 'complete' | 'error' | 'cancelled';
   progress: number;
   stage: string;
   documentId: string;
@@ -31,6 +31,8 @@ interface UploadStatus {
   extractedChips: Record<string, string>;
   customChips: Record<string, string>;
   error?: string;
+  currentPage?: number;
+  totalPages?: number;
 }
 
 // ----------------------------------------------------------------------------
@@ -71,6 +73,8 @@ export default function TrainingPage(): React.ReactElement {
         fileType: null,
         extractedChips: {},
         customChips: {},
+        currentPage: 0,
+        totalPages: 0,
       };
 
       setQueue((prev) => [...prev, newItem]);
@@ -100,8 +104,8 @@ export default function TrainingPage(): React.ReactElement {
           )
         );
 
-        if (data.status === 'processing' || data.status === 'pending') {
-          setTimeout(poll, 1500);
+        if (data.status === 'processing' || data.status === 'pending' || data.status === 'reprocessing') {
+          setTimeout(poll, 1000);
         } else if (data.status === 'complete') {
           setRefreshTrigger((n) => n + 1);
         }

@@ -91,6 +91,9 @@ export interface ProgressData {
   chips?: Chips;
   chunkCount?: number;
   error?: string;
+  // Extraction-specific progress
+  currentPage?: number;
+  totalPages?: number;
 }
 
 export interface IngestionResult {
@@ -139,6 +142,22 @@ export interface IngestionResult {
     total: number;
   };
 }
+
+// ----------------------------------------------------------------------------
+// PROGRESS ALLOCATION
+// ----------------------------------------------------------------------------
+// Extraction (vision OCR) is ~90% of the work for PDFs
+// The remaining stages are much faster
+
+const PROGRESS_ALLOCATION = {
+  creating: { start: 0, end: 2 },
+  extracting: { start: 2, end: 90 },  // 88% of progress is extraction
+  cleaning: { start: 90, end: 91 },
+  classifying: { start: 91, end: 94 },
+  chunking: { start: 94, end: 95 },
+  embedding: { start: 95, end: 98 },
+  saving: { start: 98, end: 100 },
+};
 
 // ----------------------------------------------------------------------------
 // HELPER: Check for cancellation
@@ -210,14 +229,14 @@ export async function ingestDocument(
       if (documentId) {
         // Use existing document ID (created by upload API)
         console.log('✓ Using existing document: %s', documentId);
-        progress('creating', 5);
+        progress('creating', PROGRESS_ALLOCATION.creating.end);
       } else {
         // Create new document record
-        progress('creating', 0);
+        progress('creating', PROGRESS_ALLOCATION.creating.start);
         const doc = await createDocument(fileName);
         documentId = doc.id;
         console.log('✓ Created document: %s', documentId);
-        progress('creating', 5);
+        progress('creating', PROGRESS_ALLOCATION.creating.end);
       }
     }
 
@@ -229,10 +248,25 @@ export async function ingestDocument(
     console.log('-'.repeat(60));
     
     checkCancellation(signal);
-    progress('extracting', 5);
+    progress('extracting', PROGRESS_ALLOCATION.extracting.start);
     const extractStart = Date.now();
     
-    const rawText = await extractText(filePath);
+    // Calculate progress within extraction phase
+    const extractionRange = PROGRESS_ALLOCATION.extracting.end - PROGRESS_ALLOCATION.extracting.start;
+    
+    const rawText = await extractText(filePath, {
+      signal,
+      onProgress: (extractionProgress) => {
+        // Map extraction progress (0-100) to our extraction phase range
+        const mappedPercent = PROGRESS_ALLOCATION.extracting.start + 
+          (extractionProgress.percentComplete / 100) * extractionRange;
+        
+        progress('extracting', Math.round(mappedPercent), {
+          currentPage: extractionProgress.currentPage,
+          totalPages: extractionProgress.totalPages,
+        });
+      },
+    });
     
     timing.extraction = Date.now() - extractStart;
     console.log('✓ Extracted %d characters in %ss', 
@@ -241,7 +275,7 @@ export async function ingestDocument(
     // Always vision now
     const extractionMethod = 'vision' as const;
     
-    progress('extracting', 70);
+    progress('extracting', PROGRESS_ALLOCATION.extracting.end);
 
     // -------------------------------------------------------------------------
     // STAGE 2: CLEANING
@@ -251,7 +285,7 @@ export async function ingestDocument(
     console.log('-'.repeat(60));
     
     checkCancellation(signal);
-    progress('cleaning', 72);
+    progress('cleaning', PROGRESS_ALLOCATION.cleaning.start);
     const cleanStart = Date.now();
     
     const cleanedText = cleanText(rawText);
@@ -261,7 +295,7 @@ export async function ingestDocument(
     console.log('✓ Cleaned to %d characters (%s reduction) in %sms', 
       cleanedText.length, cleaningStats.reduction, timing.cleaning);
     
-    progress('cleaning', 75);
+    progress('cleaning', PROGRESS_ALLOCATION.cleaning.end);
 
     // -------------------------------------------------------------------------
     // STAGE 3: CLASSIFICATION
@@ -271,7 +305,7 @@ export async function ingestDocument(
     console.log('-'.repeat(60));
     
     checkCancellation(signal);
-    progress('classifying', 75);
+    progress('classifying', PROGRESS_ALLOCATION.classifying.start);
     const classifyStart = Date.now();
     
     const classification = await classifyDocument(cleanedText, templates);
@@ -283,7 +317,7 @@ export async function ingestDocument(
       (timing.classification / 1000).toFixed(1));
     
     // Report classification results including chips
-    progress('classifying', 80, { 
+    progress('classifying', PROGRESS_ALLOCATION.classifying.end, { 
       fileType: classification.file_type, 
       chips: classification.chips 
     });
@@ -296,7 +330,7 @@ export async function ingestDocument(
     console.log('-'.repeat(60));
     
     checkCancellation(signal);
-    progress('chunking', 82);
+    progress('chunking', PROGRESS_ALLOCATION.chunking.start);
     const chunkStart = Date.now();
     
     // Merge auto-extracted chips with custom chips (custom takes precedence)
@@ -321,7 +355,7 @@ export async function ingestDocument(
       chunkingResult.averageWords,
       timing.chunking);
     
-    progress('chunking', 88, { chunkCount: chunkingResult.totalChunks });
+    progress('chunking', PROGRESS_ALLOCATION.chunking.end, { chunkCount: chunkingResult.totalChunks });
 
     // -------------------------------------------------------------------------
     // STAGE 5: EMBEDDING (optional)
@@ -335,7 +369,7 @@ export async function ingestDocument(
       console.log('-'.repeat(60));
       
       checkCancellation(signal);
-      progress('embedding', 90);
+      progress('embedding', PROGRESS_ALLOCATION.embedding.start);
       const embedStart = Date.now();
       
       embeddingResult = await embedChunks(chunkingResult.chunks);
@@ -348,7 +382,7 @@ export async function ingestDocument(
         embeddingResult.estimatedCost,
         (timing.embedding / 1000).toFixed(1));
       
-      progress('embedding', 95);
+      progress('embedding', PROGRESS_ALLOCATION.embedding.end);
     } else {
       console.log('\n[SKIPPED] Embedding stage (skipEmbedding=true)');
     }
@@ -362,7 +396,7 @@ export async function ingestDocument(
       console.log('-'.repeat(60));
       
       checkCancellation(signal);
-      progress('saving', 96);
+      progress('saving', PROGRESS_ALLOCATION.saving.start);
       const saveStart = Date.now();
       
       // Save chunks with embeddings
@@ -375,7 +409,7 @@ export async function ingestDocument(
       console.log('✓ Saved %d chunks to database in %sms', 
         chunkingResult.totalChunks, timing.saving);
       
-      progress('saving', 99);
+      progress('saving', PROGRESS_ALLOCATION.saving.end);
     } else if (options.skipSave) {
       console.log('\n[SKIPPED] Save stage (skipSave=true)');
     }

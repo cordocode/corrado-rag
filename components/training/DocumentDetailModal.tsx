@@ -6,7 +6,7 @@
 // - File info (name, type, chunks, status)
 // - Timeline (uploaded, processed)
 // - Auto-identified chips
-// - Custom chips
+// - Custom chips (editable)
 // - Content preview
 // - Delete action
 //
@@ -16,6 +16,7 @@
 
 import { useState, useEffect } from 'react';
 import ChipsDisplay from './ChipsDisplay';
+import CustomChipInput from './CustomChipInput';
 
 // ----------------------------------------------------------------------------
 // TYPES
@@ -38,6 +39,7 @@ interface DocumentDetailModalProps {
   documentId: string | null;
   onClose: () => void;
   onDelete: (id: string) => void;
+  onUpdate?: () => void;
 }
 
 // ----------------------------------------------------------------------------
@@ -48,11 +50,18 @@ export default function DocumentDetailModal({
   documentId,
   onClose,
   onDelete,
+  onUpdate,
 }: DocumentDetailModalProps): React.ReactElement | null {
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  
+  // Custom chips editing state
+  const [customChips, setCustomChips] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isReprocessing, setIsReprocessing] = useState(false);
 
   // --------------------------------------------------------------------------
   // FETCH DOCUMENT
@@ -75,6 +84,7 @@ export default function DocumentDetailModal({
         }
         const data = await res.json();
         setDoc(data);
+        setCustomChips(data.custom_chips || {});
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
@@ -84,6 +94,47 @@ export default function DocumentDetailModal({
 
     fetchDocument();
   }, [documentId]);
+
+  // --------------------------------------------------------------------------
+  // POLL FOR REPROCESSING STATUS
+  // --------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!isReprocessing || !documentId) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/upload?id=${documentId}`);
+        if (!res.ok) return;
+        
+        const data = await res.json();
+        
+        if (data.status === 'complete') {
+          setIsReprocessing(false);
+          setIsSaving(false);
+          // Refresh document data
+          const docRes = await fetch(`/api/documents?id=${documentId}`);
+          if (docRes.ok) {
+            const docData = await docRes.json();
+            setDoc(docData);
+            setCustomChips(docData.custom_chips || {});
+          }
+          // Notify parent to refresh list
+          if (onUpdate) {
+            onUpdate();
+          }
+        } else if (data.status === 'error') {
+          setIsReprocessing(false);
+          setIsSaving(false);
+          setSaveError(data.error || 'Reprocessing failed');
+        }
+      } catch (err) {
+        console.error('Poll error:', err);
+      }
+    }, 1000);
+
+    return () => clearInterval(pollInterval);
+  }, [isReprocessing, documentId, onUpdate]);
 
   // --------------------------------------------------------------------------
   // HANDLERS
@@ -102,6 +153,47 @@ export default function DocumentDetailModal({
   function handleBackdropClick(e: React.MouseEvent): void {
     if (e.target === e.currentTarget) {
       onClose();
+    }
+  }
+
+  async function handleCustomChipsChange(newChips: Record<string, string>): Promise<void> {
+    setCustomChips(newChips);
+    setSaveError(null);
+    
+    // Check if chips actually changed
+    const currentChips = doc?.custom_chips || {};
+    const chipsChanged = JSON.stringify(currentChips) !== JSON.stringify(newChips);
+    
+    if (!chipsChanged || !documentId) return;
+    
+    setIsSaving(true);
+    
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: documentId, customChips: newChips }),
+      });
+      
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to save');
+      }
+      
+      const data = await res.json();
+      
+      if (data.status === 'reprocessing') {
+        setIsReprocessing(true);
+      } else {
+        setIsSaving(false);
+        // Update local doc state
+        if (doc) {
+          setDoc({ ...doc, custom_chips: newChips });
+        }
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save');
+      setIsSaving(false);
     }
   }
 
@@ -188,10 +280,32 @@ export default function DocumentDetailModal({
                 <ChipsDisplay chips={doc.chips} label="Auto-identified" />
               )}
 
-              {/* Custom chips */}
-              {Object.keys(doc.custom_chips).length > 0 && (
-                <ChipsDisplay chips={doc.custom_chips} label="Custom identifiers" />
-              )}
+              {/* Custom chips - editable */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+                    Custom Identifiers
+                  </h3>
+                  {isSaving && (
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      {isReprocessing ? 'Reprocessing...' : 'Saving...'}
+                    </span>
+                  )}
+                </div>
+                
+                {saveError && (
+                  <p className="text-sm text-red-600 mb-2">{saveError}</p>
+                )}
+                
+                <CustomChipInput
+                  chips={customChips}
+                  onChange={handleCustomChipsChange}
+                />
+                
+                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                  Adding or removing custom identifiers will reprocess the document to update search embeddings.
+                </p>
+              </div>
 
               {/* Full text */}
               {doc.full_text && (
@@ -215,11 +329,12 @@ export default function DocumentDetailModal({
           <div className="flex items-center justify-between p-4 border-t border-[var(--color-border)]">
             <button
               onClick={handleDelete}
+              disabled={isSaving}
               className={`text-sm px-4 py-2 rounded ${
                 confirmDelete
                   ? 'bg-red-600 text-white'
                   : 'text-red-600 hover:bg-red-600/10'
-              }`}
+              } ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               {confirmDelete ? 'Click again to confirm' : 'Delete Document'}
             </button>

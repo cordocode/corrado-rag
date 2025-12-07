@@ -65,6 +65,23 @@ const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 2000; // 2 seconds, doubles each retry
 
 // ----------------------------------------------------------------------------
+// TYPES
+// ----------------------------------------------------------------------------
+
+export interface ExtractionProgress {
+  currentPage: number;
+  totalPages: number;
+  percentComplete: number;
+}
+
+export type ExtractionProgressCallback = (progress: ExtractionProgress) => void;
+
+export interface ExtractOptions {
+  onProgress?: ExtractionProgressCallback;
+  signal?: AbortSignal;
+}
+
+// ----------------------------------------------------------------------------
 // CLAUDE CLIENT (LAZY INITIALIZATION)
 // ----------------------------------------------------------------------------
 // We use lazy initialization because the module may be imported before
@@ -96,10 +113,10 @@ function getAnthropicClient(): Anthropic {
 const EXTRACTION_PROMPT = `You are a document text extractor. Extract ALL visible text from the document image.
 
 Format rules:
-• Tables: Wrap in [TABLE] and [END TABLE] markers, use | for columns
-• Handwritten text: Wrap in [HANDWRITTEN: content]
-• Preserve section numbers (1.01, 1.02) exactly as shown
-• Preserve paragraph breaks and logical structure
+- Tables: Wrap in [TABLE] and [END TABLE] markers, use | for columns
+- Handwritten text: Wrap in [HANDWRITTEN: content]
+- Preserve section numbers (1.01, 1.02) exactly as shown
+- Preserve paragraph breaks and logical structure
 
 Output the extracted text only. Do not include any preamble, commentary, or explanation.
 
@@ -113,9 +130,13 @@ Begin extraction now:`;
  * Extracts text from a file based on its extension
  * 
  * @param filePath - Absolute path to the file
+ * @param options - Optional extraction options including progress callback
  * @returns Extracted text as a single string
  */
-export async function extractText(filePath: string): Promise<string> {
+export async function extractText(
+  filePath: string,
+  options: ExtractOptions = {}
+): Promise<string> {
   console.log('[EXTRACTOR] Starting extraction for:', filePath);
 
   if (!fs.existsSync(filePath)) {
@@ -133,10 +154,14 @@ export async function extractText(filePath: string): Promise<string> {
 
   switch (extension) {
     case '.pdf':
-      extractedText = await extractPdfText(filePath);
+      extractedText = await extractPdfText(filePath, options);
       break;
     case '.txt':
       extractedText = fs.readFileSync(filePath, 'utf-8');
+      // For txt files, report immediate completion
+      if (options.onProgress) {
+        options.onProgress({ currentPage: 1, totalPages: 1, percentComplete: 100 });
+      }
       break;
     default:
       throw new Error(`No extractor implemented for: ${extension}`);
@@ -154,10 +179,13 @@ export async function extractText(filePath: string): Promise<string> {
  * Extracts text from a PDF using Claude Vision
  * We always use vision for consistency across all document types
  */
-async function extractPdfText(filePath: string): Promise<string> {
+async function extractPdfText(
+  filePath: string,
+  options: ExtractOptions = {}
+): Promise<string> {
   console.log('[EXTRACTOR] Using Claude Vision for PDF extraction...');
 
-  // Get page count for logging
+  // Get page count for logging and progress
   let pageCount = 0;
   try {
     const info = execSync(`pdfinfo "${filePath}"`, { encoding: 'utf-8' });
@@ -168,7 +196,7 @@ async function extractPdfText(filePath: string): Promise<string> {
     console.log('[EXTRACTOR] Could not determine page count');
   }
 
-  return await extractWithClaudeVision(filePath, pageCount);
+  return await extractWithClaudeVision(filePath, pageCount, options);
 }
 
 // ----------------------------------------------------------------------------
@@ -196,8 +224,14 @@ async function extractPdfText(filePath: string): Promise<string> {
  * 5. FILE SOURCE: Currently reads from local filepath.
  *    → In production, download from Supabase Storage URL instead
  */
-async function extractWithClaudeVision(filePath: string, pageCount: number): Promise<string> {
+async function extractWithClaudeVision(
+  filePath: string,
+  pageCount: number,
+  options: ExtractOptions = {}
+): Promise<string> {
   console.log('[EXTRACTOR] Starting Claude Vision extraction...');
+
+  const { onProgress, signal } = options;
 
   // TODO: PRODUCTION - See function docstring for full list of production changes needed
   // Clean up any leftover temp files from previous runs
@@ -229,15 +263,34 @@ async function extractWithClaudeVision(filePath: string, pageCount: number): Pro
       throw new Error('No images generated from PDF');
     }
 
+    // Update pageCount if we now know the actual count
+    const totalPages = imageFiles.length;
+
+    // Report initial progress
+    if (onProgress) {
+      onProgress({ currentPage: 0, totalPages, percentComplete: 0 });
+    }
+
     // Process EACH PAGE INDIVIDUALLY
     const pageTexts: string[] = [];
     
     for (let i = 0; i < imageFiles.length; i++) {
+      // Check for cancellation
+      if (signal?.aborted) {
+        throw new Error('Extraction cancelled');
+      }
+
       const pageNum = i + 1;
-      console.log('[EXTRACTOR] Processing page %d/%d...', pageNum, imageFiles.length);
+      console.log('[EXTRACTOR] Processing page %d/%d...', pageNum, totalPages);
       
       const pageText = await processPageWithRetry(imageFiles[i], pageNum);
       pageTexts.push(`--- PAGE ${pageNum} ---\n\n${pageText}`);
+
+      // Report progress after each page
+      if (onProgress) {
+        const percentComplete = Math.round((pageNum / totalPages) * 100);
+        onProgress({ currentPage: pageNum, totalPages, percentComplete });
+      }
     }
 
     return pageTexts.join('\n\n');

@@ -41,6 +41,7 @@ export default function TrainedDocuments({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [internalRefresh, setInternalRefresh] = useState(0);
 
   // --------------------------------------------------------------------------
   // FETCH DOCUMENTS
@@ -64,7 +65,7 @@ export default function TrainedDocuments({
 
   useEffect(() => {
     fetchDocuments();
-  }, [fetchDocuments, refreshTrigger]);
+  }, [fetchDocuments, refreshTrigger, internalRefresh]);
 
   // --------------------------------------------------------------------------
   // HANDLERS
@@ -87,6 +88,11 @@ export default function TrainedDocuments({
     } catch (err) {
       console.error('Delete error:', err);
     }
+  }
+
+  function handleDocumentUpdate(): void {
+    // Trigger a refresh of the documents list
+    setInternalRefresh((n) => n + 1);
   }
 
   // --------------------------------------------------------------------------
@@ -151,6 +157,7 @@ export default function TrainedDocuments({
         documentId={selectedId}
         onClose={() => setSelectedId(null)}
         onDelete={handleDelete}
+        onUpdate={handleDocumentUpdate}
       />
     </div>
   );

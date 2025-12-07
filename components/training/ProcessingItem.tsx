@@ -4,8 +4,9 @@
 //
 // Single file in the processing queue. Shows:
 // - File name and type
-// - Animated dotted progress bar (while processing)
-// - Stage text (while processing)
+// - Progress bar with solid fill + hatched remaining pattern
+// - Percentage display
+// - Stage text with sparkle emoji
 // - Cancel button (while processing)
 // - Extracted chips (when complete)
 // - Custom chip input (when complete)
@@ -15,7 +16,6 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
 import ChipsDisplay from './ChipsDisplay';
 import CustomChipInput from './CustomChipInput';
 
@@ -26,23 +26,19 @@ import CustomChipInput from './CustomChipInput';
 interface ProcessingItemProps {
   id: string;
   fileName: string;
-  status: 'pending' | 'processing' | 'complete' | 'error' | 'cancelled';
+  status: 'pending' | 'processing' | 'reprocessing' | 'complete' | 'error' | 'cancelled';
   progress: number;
   stage: string;
   fileType: string | null;
   extractedChips: Record<string, string>;
   customChips: Record<string, string>;
   error?: string;
+  currentPage?: number;
+  totalPages?: number;
   onCancel: (id: string) => void;
   onCustomChipsChange: (id: string, chips: Record<string, string>) => void;
   onDismiss: (id: string) => void;
 }
-
-// ----------------------------------------------------------------------------
-// CONSTANTS
-// ----------------------------------------------------------------------------
-
-const TOTAL_DOTS = 20;
 
 // ----------------------------------------------------------------------------
 // COMPONENT
@@ -62,42 +58,12 @@ export default function ProcessingItem({
   onCustomChipsChange,
   onDismiss,
 }: ProcessingItemProps): React.ReactElement {
-  const isProcessing = status === 'processing' || status === 'pending';
+  const isProcessing = status === 'processing' || status === 'pending' || status === 'reprocessing';
   const isComplete = status === 'complete';
   const isError = status === 'error' || status === 'cancelled';
 
-  // Smooth progress animation
-  const [displayProgress, setDisplayProgress] = useState(0);
-  const [animOffset, setAnimOffset] = useState(0);
-
-  // Smoothly animate progress changes
-  useEffect(() => {
-    if (progress > displayProgress) {
-      const timer = setInterval(() => {
-        setDisplayProgress((prev) => {
-          const next = prev + 0.5;
-          if (next >= progress) {
-            clearInterval(timer);
-            return progress;
-          }
-          return next;
-        });
-      }, 50);
-      return () => clearInterval(timer);
-    }
-  }, [progress, displayProgress]);
-
-  // Animate the shimmer effect on dots
-  useEffect(() => {
-    if (!isProcessing) return;
-    const timer = setInterval(() => {
-      setAnimOffset((prev) => (prev + 1) % TOTAL_DOTS);
-    }, 150);
-    return () => clearInterval(timer);
-  }, [isProcessing]);
-
-  // Calculate filled dots
-  const filledDots = Math.floor((displayProgress / 100) * TOTAL_DOTS);
+  // Clamp progress between 0 and 100
+  const clampedProgress = Math.min(100, Math.max(0, progress));
 
   // --------------------------------------------------------------------------
   // RENDER
@@ -109,11 +75,14 @@ export default function ProcessingItem({
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-[var(--color-text-primary)] truncate">
-            {fileName}
-          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--color-text-muted)]">📄</span>
+            <p className="font-medium text-[var(--color-text-primary)] truncate">
+              {fileName}
+            </p>
+          </div>
           {fileType && (
-            <p className="text-xs text-[var(--color-text-muted)] mt-0.5 uppercase">
+            <p className="text-xs text-[var(--color-text-muted)] mt-0.5 uppercase ml-6">
               {fileType}
             </p>
           )}
@@ -122,9 +91,10 @@ export default function ProcessingItem({
         {isProcessing && (
           <button
             onClick={() => onCancel(id)}
-            className="text-sm text-[var(--color-text-muted)] hover:text-red-600"
+            className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] text-lg leading-none ml-2"
+            title="Cancel"
           >
-            Cancel
+            [X]
           </button>
         )}
         
@@ -138,28 +108,38 @@ export default function ProcessingItem({
         )}
       </div>
 
-      {/* Dotted progress bar */}
+      {/* Progress bar - new design */}
       {isProcessing && (
         <div className="mb-3">
-          <div className="flex gap-1">
-            {Array.from({ length: TOTAL_DOTS }).map((_, i) => {
-              const isFilled = i < filledDots;
-              const isShimmer = !isFilled && i === filledDots && (animOffset % 2 === 0);
-              return (
-                <div
-                  key={i}
-                  className={`
-                    h-2 flex-1 rounded-sm transition-all duration-150
-                    ${isFilled 
-                      ? 'bg-[var(--color-text-primary)]' 
-                      : isShimmer
-                        ? 'bg-[var(--color-text-muted)]'
-                        : 'bg-[var(--color-border)]'
-                    }
-                  `}
-                />
-              );
-            })}
+          <div className="flex items-center gap-3">
+            {/* Progress bar container */}
+            <div className="flex-1 h-6 relative overflow-hidden rounded-sm">
+              {/* Hatched background pattern (remaining portion) */}
+              <div 
+                className="absolute inset-0"
+                style={{
+                  backgroundImage: `repeating-linear-gradient(
+                    90deg,
+                    var(--color-text-primary) 0px,
+                    var(--color-text-primary) 2px,
+                    transparent 2px,
+                    transparent 6px
+                  )`,
+                  opacity: 0.3,
+                }}
+              />
+              
+              {/* Solid fill (completed portion) */}
+              <div 
+                className="absolute inset-y-0 left-0 bg-[var(--color-text-primary)] transition-all duration-300 ease-out"
+                style={{ width: `${clampedProgress}%` }}
+              />
+            </div>
+            
+            {/* Percentage */}
+            <span className="text-sm font-medium text-[var(--color-text-primary)] w-12 text-right">
+              {Math.round(clampedProgress)}%
+            </span>
           </div>
         </div>
       )}
@@ -167,7 +147,7 @@ export default function ProcessingItem({
       {/* Stage text */}
       {isProcessing && (
         <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
-          <span className="animate-pulse">·</span>
+          <span>✨</span>
           <span>{stage}</span>
         </div>
       )}
@@ -183,7 +163,7 @@ export default function ProcessingItem({
       {isComplete && (
         <div className="space-y-4">
           <div className="flex items-center gap-2 text-sm text-green-600">
-            <span>[ok]</span>
+            <span>✓</span>
             <span>Training complete</span>
           </div>
 
